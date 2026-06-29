@@ -20,7 +20,6 @@
   },
 
   "extras": [
-    { "name": "Checked bag (round trip)",      "amount": 35, "per": "person" },
     { "name": "Airport transfer (both ends)", "amount": 8,  "per": "person" },
     { "name": "City / tourist tax",           "amount": 2,  "per": "person_night" },
     { "name": "Bus Chisinau-Iasi (return)",    "amount": 24, "per": "person" },

@@ -65,6 +65,28 @@ HOTEL_API = "https://engine.hotellook.com/api/v2/cache.json"
 
 ORIGIN_NAMES = {"IAS": "Iasi", "KIV": "Chisinau", "RMO": "Chisinau (Intl)"}
 
+# Estimated checked-bag (~20 kg) price per FLIGHT LEG, per person, in EUR, keyed by the
+# airline's IATA code. Aviasales only exposes the real bag price via a live in-browser
+# search (loads by XHR, can't be scraped cheaply), so we estimate from the airline and
+# point the user to the booking page for the exact figure.
+AIRLINE_BAG = {
+    "W4": 50, "W6": 50, "W9": 50, "WZ": 50,        # Wizz Air
+    "FR": 42, "RK": 42,                             # Ryanair
+    "U2": 45, "EC": 45, "DS": 45,                   # easyJet
+    "VY": 45, "TO": 45, "EW": 45, "PC": 40,         # Vueling, Transavia, Eurowings, Pegasus
+}
+DEFAULT_BAG_LEG = 40
+
+
+def airline_name(code):
+    return {"W4": "Wizz Air", "W6": "Wizz Air", "W9": "Wizz Air", "FR": "Ryanair",
+            "U2": "easyJet", "VY": "Vueling", "TO": "Transavia", "EW": "Eurowings",
+            "PC": "Pegasus"}.get((code or "").upper(), code or "?")
+
+
+def airline_bag_leg(code):
+    return AIRLINE_BAG.get((code or "").upper(), DEFAULT_BAG_LEG)
+
 # Flipped on by --demo: requests are answered from built-in sample JSON shaped exactly
 # like the real APIs, so you can see the output and check the parsing without a token.
 DEMO = False
@@ -342,6 +364,10 @@ def fetch_flights(origin, dest, cfg):
 
     fare_pp = out["price"] + (back["price"] if back else 0)
     fare = round(fare_pp * travelers, 2)
+    # checked-bag estimate from the outbound airline, per leg actually flown
+    legs = 2 if (not one_way and back) else 1
+    bag_per_person = airline_bag_leg(out["airline"]) * legs
+    bag_total = round(bag_per_person * travelers, 2)
     baggage = round(cfg.get("baggage_fee_per_route", {}).get(origin, 0) * travelers, 2)
     actual_nights = None
     if back:
@@ -361,6 +387,9 @@ def fetch_flights(origin, dest, cfg):
         "actual_nights": actual_nights,
         "one_way": one_way,
         "booking_link": booking_link,
+        "bag_total": bag_total,
+        "bag_airline": airline_name(out["airline"]),
+        "bag_legs": legs,
     }
 
 
@@ -482,7 +511,8 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
     for origin, oname, flights in flight_rows:
         stay_total = stay["stay_total"] if stay else 0
         extra_items, extra_total = compute_extras(cfg.get("extras", []), flights["travelers"], stay_nights)
-        grand = round(flights["flight_total"] + stay_total + extra_total, 2)
+        bag_total = flights["bag_total"]
+        grand = round(flights["flight_total"] + bag_total + stay_total + extra_total, 2)
         results.append((origin, oname, flights, grand))
 
         prev_best = db_best(db, origin, dest_iata)
@@ -504,6 +534,7 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
         else:
             say(f"  Return   : none found (try one-way, or widen dates/nights_flex)")
         say(f"  FLIGHTS  : {flights['flight_total']} {cur} (cached estimate, baggage NOT included)")
+        say(f"  Checked bag : +{bag_total} {cur} ({flights['bag_airline']} estimate, {flights['bag_legs']} leg(s) - exact price on booking page)")
         link_kind = "one-way" if flights["one_way"] else "round-trip (return included)"
         say(f"  Book {link_kind}: {flights['booking_link']}")
         if stay:

@@ -124,9 +124,9 @@
   .alt{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--sub);
        padding:7px 0 7px 12px;border-left:2px solid var(--line);margin:6px 0}
 
-  .bagopt{display:flex;align-items:center;gap:9px;margin:12px 0 0;font-size:14px;font-weight:500;cursor:pointer;
-       background:var(--accent-soft);border:1px solid #d6e2ff;border-radius:11px;padding:11px 13px}
-  .bagopt input{width:auto;accent-color:var(--accent)}
+  .bagopt{display:flex;align-items:flex-start;gap:9px;margin:12px 0 0;font-size:14px;font-weight:500;cursor:pointer;
+       background:var(--accent-soft);border:1px solid #d6e2ff;border-radius:11px;padding:11px 13px;line-height:1.45}
+  .bagopt input{width:auto;accent-color:var(--accent);margin-top:3px}
   .break{margin-top:14px;border-top:1px dashed var(--line);padding-top:12px}
   .break .row{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
   .break .row.t{font-weight:700;font-size:16px;border-top:1px solid var(--line);margin-top:6px;padding-top:10px}
@@ -249,8 +249,8 @@ function routeTxt(l){ return (l.route||[]).join(" → "); }
 function stopsTxt(l){ const v=l.stops||[]; if(v.length) return v.length+" stop"+(v.length>1?"s":"")+" via "+v.join(", ");
   return l.transfers ? l.transfers+" stop"+(l.transfers>1?"s":"") : "direct"; }
 function perLabel(p){ return {trip:"per trip",person:"per person",night:"per night",person_night:"per person/night"}[p]||p; }
-function bagOf(r){ const b=(r.extras||[]).find(e=>/bag/i.test(e.name)); return b?b.total:0; }
-function otherExtras(r){ return (r.extras||[]).filter(e=>!/bag/i.test(e.name) && e.total>0); }
+function bagOf(r){ return r.bag_total||0; }
+function otherExtras(r){ return (r.extras||[]).filter(e=>e.total>0); }
 function tripTotal(r){ const stay=SELSTAY?SELSTAY.stay_total:0;
   return r.flight_total + (BAG_ON?bagOf(r):0) + otherExtras(r).reduce((s,e)=>s+e.total,0) + stay; }
 
@@ -356,26 +356,27 @@ function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.op
 /* ---------- results ---------- */
 function legRow(where, l, extra){
   const pp = travelers>1 ? '<span class="muted" style="font-weight:400;font-size:12px"> /person</span>' : '';
+  const view = l.link ? ` · <a href="${l.link}" target="_blank">view</a>` : "";
   return `<div class="leg"><div><div class="wh">${where} · ${l.date}</div>
-      <div class="det">${routeTxt(l)} · ${dur(l.duration)} · <span class="tag ${l.stops&&l.stops.length||l.transfers?'':'ok'}">${stopsTxt(l)}</span> · ${l.airline}${extra||""}</div></div>
+      <div class="det">${routeTxt(l)} · ${dur(l.duration)} · <span class="tag ${l.stops&&l.stops.length||l.transfers?'':'ok'}">${stopsTxt(l)}</span> · ${l.airline}${extra||""}${view}</div></div>
       <div class="price">${money(l.price)}${pp}</div></div>`;
 }
 function altBlock(opts,label){
   const more=(opts||[]).slice(1); if(!more.length) return "";
   return `<details class="more"><summary>Show ${more.length} more ${label} dates</summary>`+
-    more.map(l=>`<div class="alt"><span>${l.date} · ${routeTxt(l)} · ${dur(l.duration)} · ${stopsTxt(l)}</span><span>${money(l.price)}</span></div>`).join("")+`</details>`;
+    more.map(l=>`<div class="alt"><span>${l.date} · ${routeTxt(l)} · ${dur(l.duration)} · ${stopsTxt(l)}${l.link?` · <a href="${l.link}" target="_blank">view</a>`:""}</span><span>${money(l.price)}</span></div>`).join("")+`</details>`;
 }
 
 function flightCard(x){
   if(x.error) return `<div class="card pad"><b>${x.name} (${x.origin})</b><div class="muted" style="margin-top:6px">${x.error}</div></div>`;
   const ttl = x.travelers, stay = SELSTAY ? SELSTAY.stay_total : 0;
-  const bagDefined = (x.extras||[]).some(e=>/bag/i.test(e.name));
   const bag = bagOf(x), others = otherExtras(x), bagInc = BAG_ON && bag>0;
   const noReturn = !x.one_way && !x.back;
   const tot = Math.round(tripTotal(x)*100)/100;
   const kind = x.one_way ? "one-way" : (noReturn ? "round trip · no return found" : "round trip");
-  const bagToggle = bagDefined ? `<label class="bagopt"><input type="checkbox" class="bagchk" ${BAG_ON?"checked":""}>
-       Include checked bag${bag>0?` (+${money(bag)}${ttl>1?` for ${ttl}`:""})`:" (set its price in step 2 → Edit)"}</label>` : "";
+  const bagToggle = bag>0 ? `<label class="bagopt"><input type="checkbox" class="bagchk" ${BAG_ON?"checked":""}>
+       <span>Include checked bag <b>+${money(bag)}</b>
+       <span class="muted" style="font-weight:400">— ${x.bag_airline} estimate (${x.bag_legs} leg${x.bag_legs>1?"s":""}${ttl>1?", "+ttl+" travelers":""}); exact price on the booking page</span></span></label>` : "";
   return `<div class="card pad" style="margin-bottom:16px">
     <div class="fhead">
       <div><div class="ftitle">${x.name} → ${LAST.label}</div><div class="fmeta">${kind} · ${ttl} traveler${ttl>1?"s":""}</div></div>
@@ -390,7 +391,7 @@ function flightCard(x){
     <details class="incl"><summary>What's included</summary>
       <div class="break">
         <div class="row"><span class="muted">Flights, no bag${ttl>1?` (${ttl} travelers)`:""}</span><span>${money(x.flight_total)}</span></div>
-        ${bagInc?`<div class="row"><span class="muted">Checked bag</span><span>${money(bag)}</span></div>`:""}
+        ${bagInc?`<div class="row"><span class="muted">Checked bag (${x.bag_airline} est.)</span><span>${money(bag)}</span></div>`:""}
         ${others.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
         ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
         <div class="row t"><span>Total</span><span>~${money(tot)}</span></div>

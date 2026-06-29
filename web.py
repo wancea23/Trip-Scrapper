@@ -81,6 +81,7 @@ def _one(origin, dest_iata, c):
         "baggage": f["baggage"], "flight_total": f["flight_total"],
         "actual_nights": f["actual_nights"], "travelers": f["travelers"],
         "one_way": f["one_way"], "booking_link": f["booking_link"],
+        "bag_total": f["bag_total"], "bag_airline": f["bag_airline"], "bag_legs": f["bag_legs"],
         # so the front end can derive the stay dates / display them
         "out_date": out["date"], "back_date": back["date"] if back else None,
     }
