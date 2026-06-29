@@ -1,15 +1,16 @@
 {
-  "_comment": "Pick a destination by city OR country in the UI / config.json. airport = IATA code used for flights; hotel_location = name used for hotel search. Add your own freely.",
+  "_comment": "Pick a destination by city OR country in the UI. airport = IATA code used for flights (metro/city codes like TYO/NYC where a city has several airports); hotel_location = name used for the Airbnb search. Add your own freely.",
 
   "Bucharest":   { "country": "Romania",        "airport": "OTP", "hotel_location": "Bucharest" },
   "Cluj-Napoca": { "country": "Romania",        "airport": "CLJ", "hotel_location": "Cluj-Napoca" },
   "Timisoara":   { "country": "Romania",        "airport": "TSR", "hotel_location": "Timisoara" },
 
   "Prague":      { "country": "Czech Republic", "airport": "PRG", "hotel_location": "Prague" },
-
   "Vienna":      { "country": "Austria",        "airport": "VIE", "hotel_location": "Vienna" },
-
   "Budapest":    { "country": "Hungary",        "airport": "BUD", "hotel_location": "Budapest" },
+  "Bratislava":  { "country": "Slovakia",       "airport": "BTS", "hotel_location": "Bratislava" },
+  "Ljubljana":   { "country": "Slovenia",       "airport": "LJU", "hotel_location": "Ljubljana" },
+  "Luxembourg":  { "country": "Luxembourg",     "airport": "LUX", "hotel_location": "Luxembourg" },
 
   "Warsaw":      { "country": "Poland",         "airport": "WAW", "hotel_location": "Warsaw" },
   "Krakow":      { "country": "Poland",         "airport": "KRK", "hotel_location": "Krakow" },
@@ -22,62 +23,133 @@
   "Hamburg":     { "country": "Germany",        "airport": "HAM", "hotel_location": "Hamburg" },
   "Cologne":     { "country": "Germany",        "airport": "CGN", "hotel_location": "Cologne" },
 
-  "Rome":        { "country": "Italy",          "airport": "FCO", "hotel_location": "Rome" },
-  "Milan":       { "country": "Italy",          "airport": "MXP", "hotel_location": "Milan" },
+  "Rome":        { "country": "Italy",          "airport": "ROM", "hotel_location": "Rome" },
+  "Milan":       { "country": "Italy",          "airport": "MIL", "hotel_location": "Milan" },
   "Venice":      { "country": "Italy",          "airport": "VCE", "hotel_location": "Venice" },
   "Naples":      { "country": "Italy",          "airport": "NAP", "hotel_location": "Naples" },
   "Bologna":     { "country": "Italy",          "airport": "BLQ", "hotel_location": "Bologna" },
-  "Bergamo":     { "country": "Italy",          "airport": "BGY", "hotel_location": "Bergamo" },
   "Catania":     { "country": "Italy",          "airport": "CTA", "hotel_location": "Catania" },
 
   "Barcelona":   { "country": "Spain",          "airport": "BCN", "hotel_location": "Barcelona" },
   "Madrid":      { "country": "Spain",          "airport": "MAD", "hotel_location": "Madrid" },
   "Malaga":      { "country": "Spain",          "airport": "AGP", "hotel_location": "Malaga" },
   "Valencia":    { "country": "Spain",          "airport": "VLC", "hotel_location": "Valencia" },
-  "Alicante":    { "country": "Spain",          "airport": "ALC", "hotel_location": "Alicante" },
   "Palma":       { "country": "Spain",          "airport": "PMI", "hotel_location": "Palma de Mallorca" },
+  "Ibiza":       { "country": "Spain",          "airport": "IBZ", "hotel_location": "Ibiza" },
+  "Tenerife":    { "country": "Spain",          "airport": "TFS", "hotel_location": "Tenerife" },
 
-  "Paris":       { "country": "France",         "airport": "CDG", "hotel_location": "Paris" },
+  "Paris":       { "country": "France",         "airport": "PAR", "hotel_location": "Paris" },
   "Nice":        { "country": "France",         "airport": "NCE", "hotel_location": "Nice" },
   "Marseille":   { "country": "France",         "airport": "MRS", "hotel_location": "Marseille" },
   "Lyon":        { "country": "France",         "airport": "LYS", "hotel_location": "Lyon" },
 
   "Amsterdam":   { "country": "Netherlands",    "airport": "AMS", "hotel_location": "Amsterdam" },
   "Eindhoven":   { "country": "Netherlands",    "airport": "EIN", "hotel_location": "Eindhoven" },
-
   "Brussels":    { "country": "Belgium",        "airport": "BRU", "hotel_location": "Brussels" },
   "Charleroi":   { "country": "Belgium",        "airport": "CRL", "hotel_location": "Charleroi" },
 
   "London":      { "country": "United Kingdom", "airport": "LON", "hotel_location": "London" },
   "Manchester":  { "country": "United Kingdom", "airport": "MAN", "hotel_location": "Manchester" },
   "Edinburgh":   { "country": "United Kingdom", "airport": "EDI", "hotel_location": "Edinburgh" },
-
   "Dublin":      { "country": "Ireland",        "airport": "DUB", "hotel_location": "Dublin" },
 
   "Athens":      { "country": "Greece",         "airport": "ATH", "hotel_location": "Athens" },
   "Thessaloniki":{ "country": "Greece",         "airport": "SKG", "hotel_location": "Thessaloniki" },
-
   "Lisbon":      { "country": "Portugal",       "airport": "LIS", "hotel_location": "Lisbon" },
   "Porto":       { "country": "Portugal",       "airport": "OPO", "hotel_location": "Porto" },
 
   "Zurich":      { "country": "Switzerland",    "airport": "ZRH", "hotel_location": "Zurich" },
   "Geneva":      { "country": "Switzerland",    "airport": "GVA", "hotel_location": "Geneva" },
-
   "Copenhagen":  { "country": "Denmark",        "airport": "CPH", "hotel_location": "Copenhagen" },
-  "Stockholm":   { "country": "Sweden",         "airport": "ARN", "hotel_location": "Stockholm" },
+  "Stockholm":   { "country": "Sweden",         "airport": "STO", "hotel_location": "Stockholm" },
   "Oslo":        { "country": "Norway",         "airport": "OSL", "hotel_location": "Oslo" },
   "Helsinki":    { "country": "Finland",        "airport": "HEL", "hotel_location": "Helsinki" },
+  "Reykjavik":   { "country": "Iceland",        "airport": "REK", "hotel_location": "Reykjavik" },
+
+  "Tallinn":     { "country": "Estonia",        "airport": "TLL", "hotel_location": "Tallinn" },
+  "Riga":        { "country": "Latvia",         "airport": "RIX", "hotel_location": "Riga" },
+  "Vilnius":     { "country": "Lithuania",      "airport": "VNO", "hotel_location": "Vilnius" },
 
   "Sofia":       { "country": "Bulgaria",       "airport": "SOF", "hotel_location": "Sofia" },
   "Varna":       { "country": "Bulgaria",       "airport": "VAR", "hotel_location": "Varna" },
-
   "Zagreb":      { "country": "Croatia",        "airport": "ZAG", "hotel_location": "Zagreb" },
   "Split":       { "country": "Croatia",        "airport": "SPU", "hotel_location": "Split" },
   "Dubrovnik":   { "country": "Croatia",        "airport": "DBV", "hotel_location": "Dubrovnik" },
+  "Belgrade":    { "country": "Serbia",         "airport": "BEG", "hotel_location": "Belgrade" },
+  "Tirana":      { "country": "Albania",        "airport": "TIA", "hotel_location": "Tirana" },
+  "Skopje":      { "country": "North Macedonia","airport": "SKP", "hotel_location": "Skopje" },
+  "Sarajevo":    { "country": "Bosnia",         "airport": "SJJ", "hotel_location": "Sarajevo" },
+  "Podgorica":   { "country": "Montenegro",     "airport": "TGD", "hotel_location": "Podgorica" },
 
   "Istanbul":    { "country": "Turkey",         "airport": "IST", "hotel_location": "Istanbul" },
   "Antalya":     { "country": "Turkey",         "airport": "AYT", "hotel_location": "Antalya" },
-
   "Larnaca":     { "country": "Cyprus",         "airport": "LCA", "hotel_location": "Larnaca" },
-  "Malta":       { "country": "Malta",          "airport": "MLA", "hotel_location": "Malta" }
+  "Malta":       { "country": "Malta",          "airport": "MLA", "hotel_location": "Malta" },
+
+  "Tbilisi":     { "country": "Georgia",        "airport": "TBS", "hotel_location": "Tbilisi" },
+  "Yerevan":     { "country": "Armenia",        "airport": "EVN", "hotel_location": "Yerevan" },
+  "Baku":        { "country": "Azerbaijan",     "airport": "GYD", "hotel_location": "Baku" },
+
+  "Tokyo":       { "country": "Japan",          "airport": "TYO", "hotel_location": "Tokyo" },
+  "Osaka":       { "country": "Japan",          "airport": "KIX", "hotel_location": "Osaka" },
+  "Kyoto":       { "country": "Japan",          "airport": "KIX", "hotel_location": "Kyoto" },
+  "Sapporo":     { "country": "Japan",          "airport": "CTS", "hotel_location": "Sapporo" },
+  "Fukuoka":     { "country": "Japan",          "airport": "FUK", "hotel_location": "Fukuoka" },
+  "Okinawa":     { "country": "Japan",          "airport": "OKA", "hotel_location": "Okinawa" },
+
+  "Seoul":       { "country": "South Korea",    "airport": "SEL", "hotel_location": "Seoul" },
+  "Busan":       { "country": "South Korea",    "airport": "PUS", "hotel_location": "Busan" },
+  "Beijing":     { "country": "China",          "airport": "BJS", "hotel_location": "Beijing" },
+  "Shanghai":    { "country": "China",          "airport": "SHA", "hotel_location": "Shanghai" },
+  "Hong Kong":   { "country": "Hong Kong",      "airport": "HKG", "hotel_location": "Hong Kong" },
+  "Taipei":      { "country": "Taiwan",         "airport": "TPE", "hotel_location": "Taipei" },
+
+  "Bangkok":     { "country": "Thailand",       "airport": "BKK", "hotel_location": "Bangkok" },
+  "Phuket":      { "country": "Thailand",       "airport": "HKT", "hotel_location": "Phuket" },
+  "Chiang Mai":  { "country": "Thailand",       "airport": "CNX", "hotel_location": "Chiang Mai" },
+  "Singapore":   { "country": "Singapore",      "airport": "SIN", "hotel_location": "Singapore" },
+  "Kuala Lumpur":{ "country": "Malaysia",       "airport": "KUL", "hotel_location": "Kuala Lumpur" },
+  "Bali":        { "country": "Indonesia",      "airport": "DPS", "hotel_location": "Bali" },
+  "Jakarta":     { "country": "Indonesia",      "airport": "CGK", "hotel_location": "Jakarta" },
+  "Hanoi":       { "country": "Vietnam",        "airport": "HAN", "hotel_location": "Hanoi" },
+  "Ho Chi Minh": { "country": "Vietnam",        "airport": "SGN", "hotel_location": "Ho Chi Minh City" },
+  "Manila":      { "country": "Philippines",    "airport": "MNL", "hotel_location": "Manila" },
+  "Delhi":       { "country": "India",          "airport": "DEL", "hotel_location": "Delhi" },
+  "Mumbai":      { "country": "India",          "airport": "BOM", "hotel_location": "Mumbai" },
+
+  "Dubai":       { "country": "UAE",            "airport": "DXB", "hotel_location": "Dubai" },
+  "Abu Dhabi":   { "country": "UAE",            "airport": "AUH", "hotel_location": "Abu Dhabi" },
+  "Doha":        { "country": "Qatar",          "airport": "DOH", "hotel_location": "Doha" },
+  "Tel Aviv":    { "country": "Israel",         "airport": "TLV", "hotel_location": "Tel Aviv" },
+  "Amman":       { "country": "Jordan",         "airport": "AMM", "hotel_location": "Amman" },
+
+  "Cairo":       { "country": "Egypt",          "airport": "CAI", "hotel_location": "Cairo" },
+  "Hurghada":    { "country": "Egypt",          "airport": "HRG", "hotel_location": "Hurghada" },
+  "Sharm El Sheikh": { "country": "Egypt",      "airport": "SSH", "hotel_location": "Sharm El Sheikh" },
+  "Marrakech":   { "country": "Morocco",        "airport": "RAK", "hotel_location": "Marrakech" },
+  "Casablanca":  { "country": "Morocco",        "airport": "CMN", "hotel_location": "Casablanca" },
+  "Cape Town":   { "country": "South Africa",   "airport": "CPT", "hotel_location": "Cape Town" },
+  "Johannesburg":{ "country": "South Africa",   "airport": "JNB", "hotel_location": "Johannesburg" },
+  "Nairobi":     { "country": "Kenya",          "airport": "NBO", "hotel_location": "Nairobi" },
+  "Zanzibar":    { "country": "Tanzania",       "airport": "ZNZ", "hotel_location": "Zanzibar" },
+
+  "New York":    { "country": "USA",            "airport": "NYC", "hotel_location": "New York" },
+  "Los Angeles": { "country": "USA",            "airport": "LAX", "hotel_location": "Los Angeles" },
+  "Miami":       { "country": "USA",            "airport": "MIA", "hotel_location": "Miami" },
+  "Chicago":     { "country": "USA",            "airport": "CHI", "hotel_location": "Chicago" },
+  "San Francisco": { "country": "USA",          "airport": "SFO", "hotel_location": "San Francisco" },
+  "Las Vegas":   { "country": "USA",            "airport": "LAS", "hotel_location": "Las Vegas" },
+  "Toronto":     { "country": "Canada",         "airport": "YTO", "hotel_location": "Toronto" },
+  "Vancouver":   { "country": "Canada",         "airport": "YVR", "hotel_location": "Vancouver" },
+  "Mexico City": { "country": "Mexico",         "airport": "MEX", "hotel_location": "Mexico City" },
+  "Cancun":      { "country": "Mexico",         "airport": "CUN", "hotel_location": "Cancun" },
+
+  "Rio de Janeiro": { "country": "Brazil",      "airport": "RIO", "hotel_location": "Rio de Janeiro" },
+  "Sao Paulo":   { "country": "Brazil",         "airport": "SAO", "hotel_location": "Sao Paulo" },
+  "Buenos Aires":{ "country": "Argentina",      "airport": "BUE", "hotel_location": "Buenos Aires" },
+  "Lima":        { "country": "Peru",           "airport": "LIM", "hotel_location": "Lima" },
+
+  "Sydney":      { "country": "Australia",      "airport": "SYD", "hotel_location": "Sydney" },
+  "Melbourne":   { "country": "Australia",      "airport": "MEL", "hotel_location": "Melbourne" },
+  "Auckland":    { "country": "New Zealand",    "airport": "AKL", "hotel_location": "Auckland" }
 }

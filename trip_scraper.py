@@ -55,6 +55,11 @@ import requests
 
 import stays  # accommodation prices (Airbnb + Booking via RapidAPI)
 
+try:  # don't crash printing non-Latin city/listing names on a Windows console
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 CITIES_PATH = os.path.join(HERE, "cities.json")

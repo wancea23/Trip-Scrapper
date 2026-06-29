@@ -21,6 +21,11 @@ from urllib.parse import quote
 
 import requests
 
+try:  # don't crash printing non-Latin listing names on a Windows console
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
 AIRBNB_HOST = "airbnb19.p.rapidapi.com"        # only used if a RapidAPI key is set
@@ -273,7 +278,7 @@ def _probe(location):
     here = os.path.dirname(os.path.abspath(__file__))
     cfg = json.load(open(os.path.join(here, "config.json"), encoding="utf-8"))
     ci = cfg["trip"]["depart_from"]
-    nights = cfg["trip"]["nights"]
+    nights = cfg["trip"].get("nights_min") or cfg["trip"].get("nights") or 3
     co = (datetime.strptime(ci, "%Y-%m-%d") + timedelta(days=nights)).strftime("%Y-%m-%d")
     print(f"Scraping Airbnb for {location}  {ci} .. {co}  ({nights} nights)")
     s = cheapest_stay(location, ci, nights, cfg["currency"], cfg)
