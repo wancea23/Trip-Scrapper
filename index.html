@@ -7,6 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsvectormap@1.5.3/dist/css/jsvectormap.min.css">
+<script src="https://cdn.jsdelivr.net/npm/jsvectormap@1.5.3/dist/js/jsvectormap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsvectormap@1.5.3/dist/maps/world.js"></script>
 <style>
   :root{
     --bg:#f4f5f7; --card:#ffffff; --ink:#0f172a; --sub:#667085; --line:#e7e9ee;
@@ -87,6 +90,11 @@
   .country{font-size:12px;font-weight:700;color:var(--sub);letter-spacing:.06em;text-transform:uppercase;
            margin:18px 0 9px}
   .picker{max-height:none}
+  #map{height:460px;margin-top:8px;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+  #map .jvm-zoom-btn{background:var(--ink);border-radius:7px}
+  @media(max-width:560px){ #map{height:330px} }
+  #countryCities{margin-top:16px}
+  #countryCities .cc-head{font-size:16px;font-weight:600;margin:6px 2px 10px}
 
   /* traveler stepper */
   .num{display:inline-flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:11px;overflow:hidden}
@@ -182,10 +190,11 @@
   <!-- STEP 1 : destination -->
   <section class="step" data-s="1">
     <h2 class="q">Where do you want to go?</h2>
-    <p class="lead">Pick a destination. You can also compare every city at once.</p>
+    <p class="lead">Click a coloured country on the map to pick a city. Grey countries have no destinations yet — or just search below.</p>
     <input id="filter" placeholder="Search a country or city">
     <div style="margin:10px 2px 2px"><a id="cmpLink" href="#">Not sure? Compare all destinations &rarr;</a></div>
-    <div class="picker" id="picker"></div>
+    <div id="map"></div>
+    <div id="countryCities"></div>
   </section>
 
   <!-- STEP 2 : details -->
@@ -266,13 +275,13 @@ async function boot(){
   $("origins").querySelectorAll(".chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
   $("triptype").querySelectorAll("button").forEach(b=>b.onclick=()=>{
     $("triptype").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); });
-  renderExtras(); renderPicker(""); renderStepper(); goStep(1);
+  renderExtras(); renderStepper(); goStep(1); setTimeout(initMap, 30);
 }
 
 let travelers=1;
 $("tup").onclick=()=>{ travelers++; $("tval").textContent=travelers; };
 $("tdn").onclick=()=>{ if(travelers>1){ travelers--; $("tval").textContent=travelers; } };
-$("filter").addEventListener("input",e=>renderPicker(e.target.value));
+$("filter").addEventListener("input",e=>onFilter(e.target.value));
 $("cmpLink").onclick=e=>{ e.preventDefault(); MODE="compare"; goStep(4); doCompare(); };
 
 /* ---------- stepper ---------- */
@@ -312,17 +321,70 @@ function renderNav(){
   };
 }
 
-/* ---------- step 1 picker ---------- */
-function renderPicker(q){
+/* ---------- step 1: interactive world map ---------- */
+const COUNTRY_ISO = {
+  "Romania":"RO","Czech Republic":"CZ","Austria":"AT","Hungary":"HU","Slovakia":"SK","Slovenia":"SI",
+  "Luxembourg":"LU","Poland":"PL","Germany":"DE","Italy":"IT","Spain":"ES","France":"FR","Netherlands":"NL",
+  "Belgium":"BE","United Kingdom":"GB","Ireland":"IE","Greece":"GR","Portugal":"PT","Switzerland":"CH",
+  "Denmark":"DK","Sweden":"SE","Norway":"NO","Finland":"FI","Iceland":"IS","Estonia":"EE","Latvia":"LV",
+  "Lithuania":"LT","Bulgaria":"BG","Croatia":"HR","Serbia":"RS","Albania":"AL","North Macedonia":"MK",
+  "Bosnia":"BA","Montenegro":"ME","Turkey":"TR","Cyprus":"CY","Malta":"MT","Georgia":"GE","Armenia":"AM",
+  "Azerbaijan":"AZ","Japan":"JP","South Korea":"KR","China":"CN","Hong Kong":"HK","Taiwan":"TW","Thailand":"TH",
+  "Singapore":"SG","Malaysia":"MY","Indonesia":"ID","Vietnam":"VN","Philippines":"PH","India":"IN","UAE":"AE",
+  "Qatar":"QA","Israel":"IL","Jordan":"JO","Egypt":"EG","Morocco":"MA","South Africa":"ZA","Kenya":"KE",
+  "Tanzania":"TZ","USA":"US","Canada":"CA","Mexico":"MX","Brazil":"BR","Argentina":"AR","Peru":"PE",
+  "Australia":"AU","New Zealand":"NZ"
+};
+let MAP=null, CODE2COUNTRY={};
+
+function citiesOf(country){ const c=COUNTRIES.find(x=>x.country===country); return c?c.cities:[]; }
+
+function pickCity(city){ SEL=city; MODE="plan"; goStep(2); }
+
+function showCity(country){
+  const cities=citiesOf(country);
+  if(cities.length===1){ pickCity(cities[0].city); return; }
+  const box=$("countryCities");
+  box.innerHTML=`<div class="cc-head">${country}</div><div class="chips">`+
+    cities.map(ct=>`<div class="chip" data-c="${ct.city}">${ct.city}<span class="code">${ct.airport}</span></div>`).join("")+`</div>`;
+  box.querySelectorAll(".chip").forEach(el=>el.onclick=()=>pickCity(el.dataset.c));
+  box.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+
+function fallbackList(){  // if the map library/CDN didn't load
+  const m=$("map"); if(m) m.style.display="none";
+  $("countryCities").innerHTML = COUNTRIES.map(c=>`<div class="country">${c.country}</div><div class="chips">`+
+    c.cities.map(ct=>`<div class="chip" data-c="${ct.city}">${ct.city}<span class="code">${ct.airport}</span></div>`).join("")+`</div>`).join("");
+  $("countryCities").querySelectorAll(".chip").forEach(el=>el.onclick=()=>pickCity(el.dataset.c));
+}
+
+function initMap(){
+  COUNTRIES.forEach(c=>{ const iso=COUNTRY_ISO[c.country]; if(iso) CODE2COUNTRY[iso]=c.country; });
+  if(typeof jsVectorMap==="undefined"){ fallbackList(); return; }
+  try{
+    MAP=new jsVectorMap({
+      selector:"#map", map:"world", zoomButtons:true, zoomOnScroll:false, regionsSelectable:false,
+      backgroundColor:"transparent",
+      regionStyle:{ initial:{fill:"#dde1e7", stroke:"#fff", strokeWidth:0.35}, hover:{fillOpacity:0.85} },
+      onRegionClick(e, code){ if(CODE2COUNTRY[code]) showCity(CODE2COUNTRY[code]); }
+    });
+    // colour the countries that have destinations (clickable); the rest stay grey
+    Object.keys(CODE2COUNTRY).forEach(iso=>{
+      const r=MAP.regions[iso];
+      if(r && r.element && r.element.setStyle) r.element.setStyle({fill:"#3b82f6"});
+    });
+  }catch(err){ fallbackList(); }
+}
+
+function onFilter(q){
   q=(q||"").trim().toLowerCase();
-  $("picker").innerHTML = COUNTRIES.map(c=>{
-    const cities=c.cities.filter(ct=>!q||c.country.toLowerCase().includes(q)||ct.city.toLowerCase().includes(q));
-    if(!cities.length) return "";
-    return `<div class="country">${c.country}</div><div class="chips">`+
-      cities.map(ct=>`<div class="chip ${SEL===ct.city?'on':''}" data-c="${ct.city}">
-        ${ct.city}<span class="code">${ct.airport}</span></div>`).join("")+`</div>`;
-  }).join("");
-  $("picker").querySelectorAll(".chip").forEach(el=>el.onclick=()=>{ SEL=el.dataset.c; MODE="plan"; goStep(2); });
+  const box=$("countryCities");
+  if(!q){ box.innerHTML=""; return; }
+  const hits=[];
+  COUNTRIES.forEach(c=>c.cities.forEach(ct=>{ if(c.country.toLowerCase().includes(q)||ct.city.toLowerCase().includes(q)) hits.push(ct); }));
+  box.innerHTML=`<div class="cc-head">Matches</div><div class="chips">`+
+    hits.slice(0,48).map(ct=>`<div class="chip" data-c="${ct.city}">${ct.city}<span class="code">${ct.airport}</span></div>`).join("")+`</div>`;
+  box.querySelectorAll(".chip").forEach(el=>el.onclick=()=>pickCity(el.dataset.c));
 }
 
 /* ---------- step 3 extras ---------- */
