@@ -64,6 +64,14 @@ def _cfg_for(body):
     return c
 
 
+def _ground(origin, out_date, travelers, legs):
+    """Home (Chisinau) -> the flight's airport, scaled by travelers and legs (there & back)."""
+    g = ts.sources.ground_to_airport(origin, out_date)
+    if not g:
+        return None
+    return {**g, "total": round(g["price"] * travelers * legs, 2), "legs": legs}
+
+
 def _one(origin, dest_iata, c):
     """Run one origin -> destination flight lookup, return a JSON-friendly dict."""
     oname = ts.ORIGIN_NAMES.get(origin, origin)
@@ -82,6 +90,7 @@ def _one(origin, dest_iata, c):
         "actual_nights": f["actual_nights"], "travelers": f["travelers"],
         "one_way": f["one_way"], "booking_link": f["booking_link"],
         "bag_total": f["bag_total"], "bag_airline": f["bag_airline"], "bag_legs": f["bag_legs"],
+        "ground": _ground(origin, out["date"], f["travelers"], f["bag_legs"]),
         # so the front end can derive the stay dates / display them
         "out_date": out["date"], "back_date": back["date"] if back else None,
     }

@@ -54,6 +54,7 @@ from datetime import datetime, timedelta
 import requests
 
 import stays  # accommodation prices (Airbnb + Booking via RapidAPI)
+import sources  # extra price sources: Ryanair real fares, ground transport
 
 try:  # don't crash printing non-Latin city/listing names on a Windows console
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -68,7 +69,8 @@ DB_PATH = os.path.join(HERE, "trip_prices.db")
 FLIGHT_API = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
 HOTEL_API = "https://engine.hotellook.com/api/v2/cache.json"
 
-ORIGIN_NAMES = {"IAS": "Iasi", "KIV": "Chisinau", "RMO": "Chisinau (Intl)"}
+ORIGIN_NAMES = {"IAS": "Iasi", "KIV": "Chisinau", "OTP": "Bucharest",
+                "SCV": "Suceava", "BCM": "Bacau", "CLJ": "Cluj"}
 
 # Estimated checked-bag (~20 kg) price per FLIGHT LEG, per person, in EUR, keyed by the
 # airline's IATA code. Aviasales only exposes the real bag price via a live in-browser
@@ -297,6 +299,7 @@ def _leg_dict(f, origin, dest):
         "route": route,
         "stops": route[1:-1],  # intermediate airports
         "link": "https://www.aviasales.com" + f.get("link", ""),
+        "source": "cached",  # Travelpayouts cached estimate (vs Ryanair real)
     }
 
 
@@ -322,15 +325,18 @@ def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6
             if date_from <= day <= date_to:
                 legs.append(_leg_dict(f, origin, dest))
     legs.sort(key=lambda leg: leg["price"])
-    seen, options = set(), []
-    for leg in legs:                      # keep only the cheapest fare per date
-        if leg["date"] in seen:
-            continue
-        seen.add(leg["date"])
-        options.append(leg)
-        if len(options) >= limit:
-            break
-    return options
+    by_date = {}
+    for leg in legs:                      # cheapest cached fare per date
+        by_date.setdefault(leg["date"], leg)
+    # merge in Ryanair's REAL fares; a real fare beats a cached estimate for the same date
+    try:
+        for leg in sources.ryanair_leg_options(origin, dest, date_from, date_to, currency):
+            cur = by_date.get(leg["date"])
+            if cur is None or cur.get("source") == "cached" or leg["price"] < cur["price"]:
+                by_date[leg["date"]] = leg
+    except Exception:
+        pass
+    return sorted(by_date.values(), key=lambda l: l["price"])[:limit]
 
 
 def fetch_cheapest_oneway(origin, dest, date_from, date_to, currency, token):
@@ -517,7 +523,9 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
         stay_total = stay["stay_total"] if stay else 0
         extra_items, extra_total = compute_extras(cfg.get("extras", []), flights["travelers"], stay_nights)
         bag_total = flights["bag_total"]
-        grand = round(flights["flight_total"] + bag_total + stay_total + extra_total, 2)
+        g = sources.ground_to_airport(origin, flights["out"]["date"])
+        ground_total = round(g["price"] * flights["travelers"] * flights["bag_legs"], 2) if g else 0
+        grand = round(flights["flight_total"] + bag_total + ground_total + stay_total + extra_total, 2)
         results.append((origin, oname, flights, grand))
 
         prev_best = db_best(db, origin, dest_iata)
@@ -540,6 +548,8 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
             say(f"  Return   : none found (try one-way, or widen dates/nights_flex)")
         say(f"  FLIGHTS  : {flights['flight_total']} {cur} (cached estimate, baggage NOT included)")
         say(f"  Checked bag : +{bag_total} {cur} ({flights['bag_airline']} estimate, {flights['bag_legs']} leg(s) - exact price on booking page)")
+        if g:
+            say(f"  Get to airport : +{ground_total} {cur} (Chisinau -> {g['to']} by {g['mode']}, ~{g['hours']}h est. - book {g['book']})")
         link_kind = "one-way" if flights["one_way"] else "round-trip (return included)"
         say(f"  Book {link_kind}: {flights['booking_link']}")
         if stay:

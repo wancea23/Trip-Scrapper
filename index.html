@@ -250,9 +250,10 @@ function stopsTxt(l){ const v=l.stops||[]; if(v.length) return v.length+" stop"+
   return l.transfers ? l.transfers+" stop"+(l.transfers>1?"s":"") : "direct"; }
 function perLabel(p){ return {trip:"per trip",person:"per person",night:"per night",person_night:"per person/night"}[p]||p; }
 function bagOf(r){ return r.bag_total||0; }
+function groundOf(r){ return r.ground ? r.ground.total : 0; }
 function otherExtras(r){ return (r.extras||[]).filter(e=>e.total>0); }
 function tripTotal(r){ const stay=SELSTAY?SELSTAY.stay_total:0;
-  return r.flight_total + (BAG_ON?bagOf(r):0) + otherExtras(r).reduce((s,e)=>s+e.total,0) + stay; }
+  return r.flight_total + (BAG_ON?bagOf(r):0) + groundOf(r) + otherExtras(r).reduce((s,e)=>s+e.total,0) + stay; }
 
 /* ---------- boot ---------- */
 async function boot(){
@@ -354,11 +355,14 @@ async function doSearch(){
 function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.options : (LAST&&LAST.stay?[LAST.stay]:[]); }
 
 /* ---------- results ---------- */
+function srcTag(l){ return l.source==="Ryanair"
+  ? '<span class="tag ok">Ryanair · real price</span>'
+  : '<span class="tag">cached est.</span>'; }
 function legRow(where, l, extra){
   const pp = travelers>1 ? '<span class="muted" style="font-weight:400;font-size:12px"> /person</span>' : '';
   const view = l.link ? ` · <a href="${l.link}" target="_blank">view</a>` : "";
   return `<div class="leg"><div><div class="wh">${where} · ${l.date}</div>
-      <div class="det">${routeTxt(l)} · ${dur(l.duration)} · <span class="tag ${l.stops&&l.stops.length||l.transfers?'':'ok'}">${stopsTxt(l)}</span> · ${l.airline}${extra||""}${view}</div></div>
+      <div class="det">${routeTxt(l)} · ${dur(l.duration)} · <span class="tag ${l.stops&&l.stops.length||l.transfers?'':'ok'}">${stopsTxt(l)}</span> · ${l.airline} · ${srcTag(l)}${extra||""}${view}</div></div>
       <div class="price">${money(l.price)}${pp}</div></div>`;
 }
 function altBlock(opts,label){
@@ -387,11 +391,14 @@ function flightCard(x){
     ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
        :`<div class="note" style="margin:10px 0">No return flight in your night range, so this total is the <b>outbound only</b>. Widen "Max nights" (Edit) or your dates.</div>`)}
     ${bagToggle}
+    ${x.ground?`<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} airport by ${x.ground.mode} <b>+${money(x.ground.total)}</b>
+       <span class="muted" style="font-weight:400">— ~${x.ground.hours}h, estimate; <a href="${x.ground.book}" target="_blank">book</a></span></span></div>`:""}
     <div class="ftotal"><span class="lab">${noReturn?"Total (outbound only)":"Trip total"}</span><span class="amt">~${money(tot)}</span></div>
     <details class="incl"><summary>What's included</summary>
       <div class="break">
         <div class="row"><span class="muted">Flights, no bag${ttl>1?` (${ttl} travelers)`:""}</span><span>${money(x.flight_total)}</span></div>
         ${bagInc?`<div class="row"><span class="muted">Checked bag (${x.bag_airline} est.)</span><span>${money(bag)}</span></div>`:""}
+        ${x.ground?`<div class="row"><span class="muted">Chișinău → ${x.ground.to} (${x.ground.mode})</span><span>${money(x.ground.total)}</span></div>`:""}
         ${others.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
         ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
         <div class="row t"><span>Total</span><span>~${money(tot)}</span></div>
@@ -411,7 +418,7 @@ function renderResults(){
   if(cheapestTotal!=null)
     html += `<div class="total-card"><div class="lab">Cheapest trip, all-in${BAG_ON?" (incl. bag)":""}</div>
       <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
-      <div class="sub">Flight prices are <b>cached</b> and usually <b>lower than the real bookable price</b> — always confirm on the booking page. Stay prices are live from Airbnb.</div></div>`;
+      <div class="sub">Fares tagged <b>Ryanair · real price</b> are live; <b>cached est.</b> ones come from a cache and often read low — confirm on the booking page. Stays are live from Airbnb; airport transfer is an estimate.</div></div>`;
 
   // flights first (the main thing)
   html += `<div class="sect-title">Flights</div>` + d.results.map(flightCard).join("");
