@@ -377,6 +377,7 @@ function initMap(){
   try{
     MAP=new jsVectorMap({
       selector:"#map", map:"world", zoomButtons:true, zoomOnScroll:true, zoomMax:8, zoomMin:1,
+      zoomStep:1.25, zoomAnimate:true, zoomOnScrollSpeed:1.1,
       regionsSelectable:false, bindTouchEvents:true, backgroundColor:"transparent",
       regionStyle:{ initial:{fill:"#cfd8e3", stroke:"#ffffff", strokeWidth:0.5},
                     hover:{fillOpacity:0.78} },
@@ -467,8 +468,8 @@ function flightCard(x){
     ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
        :`<div class="note" style="margin:10px 0">No return flight in your night range, so this total is the <b>outbound only</b>. Widen "Max nights" (Edit) or your dates.</div>`)}
     ${bagToggle}
-    ${x.ground?`<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} airport by ${x.ground.mode} <b>+${money(x.ground.total)}</b>
-       <span class="muted" style="font-weight:400">— ~${x.ground.hours}h, estimate; <a href="${x.ground.book}" target="_blank">book</a></span></span></div>`:""}
+    ${x.ground?`<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} by ${x.ground.mode} (${x.bag_legs>1?"round trip":"one-way"}) <b>from ~${money(x.ground.total)}</b>
+       <span class="muted" style="font-weight:400">— ~${x.ground.hours}h each way, estimate · <a href="${x.ground.book}" target="_blank">see exact price &amp; book</a></span></span></div>`:""}
     <div class="ftotal"><span class="lab">${noReturn?"Total (outbound only)":"Trip total"}</span><span class="amt">~${money(tot)}</span></div>
     <details class="incl"><summary>What's included</summary>
       <div class="break">

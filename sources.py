@@ -114,10 +114,10 @@ def flixbus_quote(from_city, to_city, date, currency="EUR"):
 # --------------------------------------------------------------------------- #
 # Typical one-way minibus/bus price (EUR) for hops no site prices cleanly. Editable.
 GROUND_EST = {
-    "IAS": {"price": 12, "mode": "minibus", "hours": 3, "book": "https://infobus.eu/en/"},
-    "OTP": {"price": 30, "mode": "bus",     "hours": 8, "book": "https://www.flixbus.com/"},
-    "SCV": {"price": 15, "mode": "minibus", "hours": 4, "book": "https://infobus.eu/en/"},
-    "BCM": {"price": 18, "mode": "minibus", "hours": 5, "book": "https://infobus.eu/en/"},
+    "IAS": {"price": 12, "mode": "minibus", "hours": 3, "book": "https://infobus.eu/en/Chisinau/Iasi"},
+    "OTP": {"price": 30, "mode": "bus",     "hours": 8, "book": "https://infobus.eu/en/Chisinau/Bucharest"},
+    "SCV": {"price": 15, "mode": "minibus", "hours": 4, "book": "https://infobus.eu/en/Chisinau/Suceava"},
+    "BCM": {"price": 18, "mode": "minibus", "hours": 5, "book": "https://infobus.eu/en/Chisinau/Bacau"},
     "KIV": {"price": 0,  "mode": "you are here", "hours": 0, "book": ""},
 }
 AIRPORT_CITY = {"IAS": "Iasi", "OTP": "Bucharest", "SCV": "Suceava", "BCM": "Bacau", "KIV": "Chisinau"}
