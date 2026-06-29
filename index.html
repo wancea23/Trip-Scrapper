@@ -468,8 +468,8 @@ function flightCard(x){
     ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
        :`<div class="leg"><div class="wh">No return flight found — outbound only</div><div></div></div>`)}
     ${bagToggle}
-    ${x.ground?`<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} by ${x.ground.mode}: <b>~${money(x.ground.price)}/ticket</b>
-       <span class="muted" style="font-weight:400">· ${money(x.ground.total)} for ${x.bag_legs>1?"round trip":"one-way"}${ttl>1?` × ${ttl}`:""}, ~${x.ground.hours}h each way · <a href="${x.ground.book}" target="_blank">exact price &amp; book</a></span></span></div>`:""}
+    ${x.ground?(()=>{ const tk=x.bag_legs*ttl; return `<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} by ${x.ground.mode}: <b>${money(x.ground.price)} × ${tk} ticket${tk>1?"s":""} = ${money(x.ground.total)}</b>
+       <span class="muted" style="font-weight:400">· ${x.bag_legs>1?"there &amp; back":"one-way"}${ttl>1?`, ${ttl} travelers`:""}, ~${x.ground.hours}h each way · <a href="${x.ground.book}" target="_blank">exact price &amp; book</a></span></span></div>`; })():""}
     <div class="ftotal"><span class="lab">${noReturn?"Total (outbound only)":"Trip total"}</span><span class="amt">~${money(tot)}</span></div>
     <details class="incl"><summary>What's included</summary>
       <div class="break">
