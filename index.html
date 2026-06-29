@@ -90,9 +90,15 @@
   .country{font-size:12px;font-weight:700;color:var(--sub);letter-spacing:.06em;text-transform:uppercase;
            margin:18px 0 9px}
   .picker{max-height:none}
-  #map{height:460px;margin-top:8px;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
-  #map .jvm-zoom-btn{background:var(--ink);border-radius:7px}
-  @media(max-width:560px){ #map{height:330px} }
+  #map{height:500px;margin-top:8px;border:1px solid #dbe3ee;border-radius:18px;
+       background:linear-gradient(180deg,#eff5fc 0%,#e7eef7 100%);overflow:hidden;box-shadow:var(--shadow);cursor:grab}
+  #map:active{cursor:grabbing}
+  #map .jvm-zoom-btn{background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:9px;
+       box-shadow:0 1px 2px rgba(16,24,40,.1);width:28px;height:28px;line-height:26px;font-size:16px;left:12px}
+  #map .jvm-zoom-btn.jvm-zoomin{top:12px}
+  #map .jvm-zoom-btn.jvm-zoomout{top:46px}
+  #map .jvm-tooltip{background:var(--ink);border-radius:8px;padding:5px 10px;font-size:13px;font-weight:600;box-shadow:var(--shadow)}
+  @media(max-width:560px){ #map{height:360px} }
   #countryCities{margin-top:16px}
   #countryCities .cc-head{font-size:16px;font-weight:600;margin:6px 2px 10px}
 
@@ -335,18 +341,25 @@ const COUNTRY_ISO = {
   "Tanzania":"TZ","USA":"US","Canada":"CA","Mexico":"MX","Brazil":"BR","Argentina":"AR","Peru":"PE",
   "Australia":"AU","New Zealand":"NZ"
 };
-let MAP=null, CODE2COUNTRY={};
+let MAP=null, CODE2COUNTRY={}, SELECTED_ISO=null;
 
 function citiesOf(country){ const c=COUNTRIES.find(x=>x.country===country); return c?c.cities:[]; }
 
 function pickCity(city){ SEL=city; MODE="plan"; goStep(2); }
 
+function highlight(iso){
+  if(!MAP) return;
+  if(SELECTED_ISO && MAP.regions[SELECTED_ISO]) MAP.regions[SELECTED_ISO].element.setStyle({fill:"#3b82f6"});
+  if(iso && MAP.regions[iso]) MAP.regions[iso].element.setStyle({fill:"#1e3a8a"});
+  SELECTED_ISO=iso;
+}
+
 function showCity(country){
+  highlight(COUNTRY_ISO[country]);
   const cities=citiesOf(country);
-  if(cities.length===1){ pickCity(cities[0].city); return; }
   const box=$("countryCities");
-  box.innerHTML=`<div class="cc-head">${country}</div><div class="chips">`+
-    cities.map(ct=>`<div class="chip" data-c="${ct.city}">${ct.city}<span class="code">${ct.airport}</span></div>`).join("")+`</div>`;
+  box.innerHTML=`<div class="cc-head">${country} <span class="muted" style="font-weight:400;font-size:13px">· choose a city</span></div><div class="chips">`+
+    cities.map(ct=>`<div class="chip ${SEL===ct.city?'on':''}" data-c="${ct.city}">${ct.city}<span class="code">${ct.airport}</span></div>`).join("")+`</div>`;
   box.querySelectorAll(".chip").forEach(el=>el.onclick=()=>pickCity(el.dataset.c));
   box.scrollIntoView({behavior:"smooth",block:"nearest"});
 }
@@ -363,15 +376,16 @@ function initMap(){
   if(typeof jsVectorMap==="undefined"){ fallbackList(); return; }
   try{
     MAP=new jsVectorMap({
-      selector:"#map", map:"world", zoomButtons:true, zoomOnScroll:false, regionsSelectable:false,
-      backgroundColor:"transparent",
-      regionStyle:{ initial:{fill:"#dde1e7", stroke:"#fff", strokeWidth:0.35}, hover:{fillOpacity:0.85} },
+      selector:"#map", map:"world", zoomButtons:true, zoomOnScroll:true, zoomMax:8, zoomMin:1,
+      regionsSelectable:false, bindTouchEvents:true, backgroundColor:"transparent",
+      regionStyle:{ initial:{fill:"#cfd8e3", stroke:"#ffffff", strokeWidth:0.5},
+                    hover:{fillOpacity:0.78} },
       onRegionClick(e, code){ if(CODE2COUNTRY[code]) showCity(CODE2COUNTRY[code]); }
     });
-    // colour the countries that have destinations (clickable); the rest stay grey
+    // colour the countries that have destinations (clickable, pointer cursor); rest stay grey
     Object.keys(CODE2COUNTRY).forEach(iso=>{
       const r=MAP.regions[iso];
-      if(r && r.element && r.element.setStyle) r.element.setStyle({fill:"#3b82f6"});
+      if(r && r.element && r.element.setStyle) r.element.setStyle({fill:"#3b82f6", cursor:"pointer"});
     });
   }catch(err){ fallbackList(); }
 }
