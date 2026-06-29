@@ -131,6 +131,18 @@
   .break .row{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
   .break .row.t{font-weight:700;font-size:16px;border-top:1px solid var(--line);margin-top:6px;padding-top:10px}
   .book{margin-top:14px}
+  .fhead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px}
+  .ftitle{font-weight:600;font-size:16px;line-height:1.3}
+  .fmeta{font-weight:400;font-size:13px;color:var(--sub);margin-top:2px}
+  .flink{font-size:13px;font-weight:600;white-space:nowrap;flex:none}
+  .ftotal{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;
+       border-top:1px solid var(--line);padding-top:13px}
+  .ftotal .lab{font-weight:600}
+  .ftotal .amt{font-weight:700;font-size:20px}
+  .incl{margin-top:8px}
+  .incl summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;list-style:none}
+  .incl summary::-webkit-details-marker{display:none}
+  .showmore{display:inline-block;margin-top:6px;font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)}
 
   .stayfilter{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
   .stayfilter button{border:1px solid var(--line);background:var(--card);border-radius:999px;
@@ -227,7 +239,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let CUR="EUR", COUNTRIES=[], ORIGINS=[], EXTRAS=[], SEL=null, STEP=1, MODE="plan";
-let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=true;
+let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=true, STAY_ALL=false;
 const STEPS=["Destination","Details","Extra costs","Your trip"];
 
 /* ---------- helpers ---------- */
@@ -334,7 +346,7 @@ async function doSearch(){
   const d = await (await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body({destination:SEL}))})).json();
   if(d.error){ $("results").innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
-  LAST=d; STAYFILTER="All";
+  LAST=d; STAYFILTER="All"; STAY_ALL=false;
   const opts=stayOptions(); SELSTAY=opts.length?opts[0]:null;
   renderResults();
 }
@@ -357,29 +369,33 @@ function altBlock(opts,label){
 function flightCard(x){
   if(x.error) return `<div class="card pad"><b>${x.name} (${x.origin})</b><div class="muted" style="margin-top:6px">${x.error}</div></div>`;
   const ttl = x.travelers, stay = SELSTAY ? SELSTAY.stay_total : 0;
+  const bagDefined = (x.extras||[]).some(e=>/bag/i.test(e.name));
   const bag = bagOf(x), others = otherExtras(x), bagInc = BAG_ON && bag>0;
   const noReturn = !x.one_way && !x.back;
   const tot = Math.round(tripTotal(x)*100)/100;
-  const kind = x.one_way ? "one-way" : (noReturn ? "round trip, no return found" : "round trip");
-  const bagToggle = bag>0 ? `<label class="bagopt"><input type="checkbox" class="bagchk" ${BAG_ON?"checked":""}>
-       Include checked bag (+${money(bag)}${ttl>1?` for ${ttl} travelers`:""})</label>` : "";
-  const flightsLab = `Flights, no bag` + (ttl>1?` (${ttl} travelers)`:"");
+  const kind = x.one_way ? "one-way" : (noReturn ? "round trip · no return found" : "round trip");
+  const bagToggle = bagDefined ? `<label class="bagopt"><input type="checkbox" class="bagchk" ${BAG_ON?"checked":""}>
+       Include checked bag${bag>0?` (+${money(bag)}${ttl>1?` for ${ttl}`:""})`:" (set its price in step 2 → Edit)"}</label>` : "";
   return `<div class="card pad" style="margin-bottom:16px">
-    <div style="font-weight:600;font-size:16px;margin-bottom:6px">${x.name} → ${LAST.label}
-      <span class="muted" style="font-weight:400;font-size:13px">· ${kind} · ${ttl} traveler${ttl>1?"s":""}</span></div>
+    <div class="fhead">
+      <div><div class="ftitle">${x.name} → ${LAST.label}</div><div class="fmeta">${kind} · ${ttl} traveler${ttl>1?"s":""}</div></div>
+      <a class="flink" href="${x.booking_link}" target="_blank">${x.one_way?"Book one-way":"Book round trip"} &rarr;</a>
+    </div>
     ${legRow("Outbound", x.out)}
     ${altBlock(x.out_options,"outbound")}
     ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
-       :`<div class="note" style="margin:10px 0">No return flight in your night range, so this total is the <b>outbound only</b>. Widen "Max nights" (step 2) or your dates.</div>`)}
+       :`<div class="note" style="margin:10px 0">No return flight in your night range, so this total is the <b>outbound only</b>. Widen "Max nights" (Edit) or your dates.</div>`)}
     ${bagToggle}
-    <div class="break">
-      <div class="row"><span class="muted">${flightsLab}</span><span>${money(x.flight_total)}</span></div>
-      ${bagInc?`<div class="row"><span class="muted">Checked bag</span><span>${money(bag)}</span></div>`:""}
-      ${others.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
-      ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
-      <div class="row t"><span>${noReturn?"Total (outbound only)":"Trip total"}</span><span>~${money(tot)}</span></div>
-    </div>
-    <div class="book"><a href="${x.booking_link}" target="_blank">${x.one_way?"Book one-way on Aviasales":"Book round trip on Aviasales (return included)"} &rarr; <span class="muted">(see real price)</span></a></div>
+    <div class="ftotal"><span class="lab">${noReturn?"Total (outbound only)":"Trip total"}</span><span class="amt">~${money(tot)}</span></div>
+    <details class="incl"><summary>What's included</summary>
+      <div class="break">
+        <div class="row"><span class="muted">Flights, no bag${ttl>1?` (${ttl} travelers)`:""}</span><span>${money(x.flight_total)}</span></div>
+        ${bagInc?`<div class="row"><span class="muted">Checked bag</span><span>${money(bag)}</span></div>`:""}
+        ${others.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
+        ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
+        <div class="row t"><span>Total</span><span>~${money(tot)}</span></div>
+      </div>
+    </details>
   </div>`;
 }
 
@@ -396,28 +412,33 @@ function renderResults(){
       <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
       <div class="sub">Flight prices are <b>cached</b> and usually <b>lower than the real bookable price</b> — always confirm on the booking page. Stay prices are live from Airbnb.</div></div>`;
 
-  // stays
+  // flights first (the main thing)
+  html += `<div class="sect-title">Flights</div>` + d.results.map(flightCard).join("");
+
+  // stays (compact: 6 shown, filterable, tap to use)
   html += `<div class="sect-title">Places to stay${ sd?` · ${sd.nights} nights, matches the flight`:""}</div>`;
   if(opts.length){
     const types=["All",...new Set(opts.map(o=>o.type))];
+    const shown = opts.filter(o=>STAYFILTER==="All"||o.type===STAYFILTER);
+    const vis = STAY_ALL ? shown : shown.slice(0,6);
     html += `<div class="stayfilter">`+types.map(t=>`<button data-t="${t}" class="${t===STAYFILTER?'on':''}">${t}</button>`).join("")+`</div>`;
-    html += opts.filter(o=>STAYFILTER==="All"||o.type===STAYFILTER).map(o=>{
+    html += vis.map(o=>{
       const gi=opts.indexOf(o), on=SELSTAY===o;
       const lk=o.link?` · <a href="${o.link}" target="_blank" onclick="event.stopPropagation()">view</a>`:"";
       return `<div class="stay ${on?'on':''}" data-i="${gi}"><div class="nm"><span class="badge">${o.type||'Stay'}</span>${o.name}${lk}</div>
         <div class="pr">${money(o.stay_total)} <span class="muted" style="font-weight:400">${money(o.per_night)}/n</span></div></div>`;
     }).join("");
+    if(!STAY_ALL && shown.length>6) html += `<span class="showmore" id="stayMore">Show all ${shown.length} places</span>`;
   } else {
     html += `<div class="note">No place to stay found for these dates. Airbnb may be rate-limiting — try again shortly. Showing flights only.</div>`;
   }
 
-  // flights
-  html += `<div class="sect-title">Flights</div>` + d.results.map(flightCard).join("");
   $("results").innerHTML = html;
 
   $("results").querySelectorAll(".stay").forEach(el=>el.onclick=()=>{ SELSTAY=opts[+el.dataset.i]; renderResults(); });
-  $("results").querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; renderResults(); });
+  $("results").querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; STAY_ALL=false; renderResults(); });
   $("results").querySelectorAll(".bagchk").forEach(c=>c.onchange=()=>{ BAG_ON=c.checked; renderResults(); });
+  const sm=$("stayMore"); if(sm) sm.onclick=()=>{ STAY_ALL=true; renderResults(); };
 }
 
 /* ---------- compare ---------- */

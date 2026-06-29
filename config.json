@@ -15,7 +15,7 @@
     "depart_to":   "2026-08-31",
     "type": "return",
     "nights_min": 3,
-    "nights_max": 7,
+    "nights_max": 10,
     "travelers": 1
   },
 
