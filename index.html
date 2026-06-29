@@ -3,335 +3,424 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trip Finder ✈</title>
+<title>Trip Finder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#0e1117; --panel:#161b22; --panel2:#1c232d; --line:#2a323d;
-    --txt:#e6edf3; --dim:#8b97a7; --accent:#3b82f6; --accent2:#22c55e;
-    --chip:#1f2733; --chipsel:#173a63; --warn:#f59e0b;
+    --bg:#f4f5f7; --card:#ffffff; --ink:#0f172a; --sub:#667085; --line:#e7e9ee;
+    --accent:#2563eb; --accent-soft:#eef3ff; --ok:#0e9f6e; --warn:#9a6700; --warn-bg:#fff8e6;
+    --radius:16px; --shadow:0 1px 2px rgba(16,24,40,.04), 0 6px 22px rgba(16,24,40,.05);
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--txt);
-       font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
-  header{padding:22px 28px;border-bottom:1px solid var(--line);
-         display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
-  header h1{margin:0;font-size:22px;letter-spacing:.3px}
-  header .sub{color:var(--dim);font-size:13px}
-  .wrap{max-width:1080px;margin:0 auto;padding:22px 28px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
-  .controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:18px}
-  label.fld{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
-  input,select{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
-        border-radius:9px;padding:9px 11px;font-size:14px;font-family:inherit}
-  input:focus,select:focus{outline:none;border-color:var(--accent)}
-  .origins{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-  .origins label{display:flex;gap:7px;align-items:center;color:var(--txt);font-size:14px;text-transform:none;letter-spacing:0;cursor:pointer}
-  .search-row{display:flex;gap:12px;margin:6px 0 16px}
-  #filter{flex:1}
-  .selbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-  .selbar .pill{background:var(--chipsel);border:1px solid #2563eb;border-radius:999px;padding:6px 14px;font-size:14px}
-  button{cursor:pointer;border:none;border-radius:10px;padding:11px 18px;font-size:14px;font-weight:600;font-family:inherit}
-  .btn{background:var(--accent);color:#fff}
-  .btn:hover{filter:brightness(1.1)}
-  .btn.alt{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
-  .btn:disabled{opacity:.5;cursor:not-allowed}
-  .country{margin:18px 0 8px;font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;
-           border-bottom:1px solid var(--line);padding-bottom:6px}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);
+       font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:760px;margin:0 auto;padding:28px 20px 80px}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:26px}
+  .brand .mark{width:30px;height:30px;border-radius:9px;background:var(--ink);
+       display:grid;place-items:center;color:#fff;font-weight:700;font-size:15px}
+  .brand h1{font-size:18px;margin:0;font-weight:600;letter-spacing:-.01em}
+  .brand span{color:var(--sub);font-size:13px;margin-left:2px}
+
+  /* stepper */
+  .stepper{display:flex;align-items:center;gap:0;margin:0 0 26px}
+  .stp{display:flex;align-items:center;gap:10px;flex:1}
+  .stp .dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;
+       border:1.5px solid var(--line);background:var(--card);color:var(--sub);
+       font-size:13px;font-weight:600;flex:none;transition:.2s}
+  .stp .lbl{font-size:13px;color:var(--sub);font-weight:500;white-space:nowrap}
+  .stp .bar{height:1.5px;background:var(--line);flex:1;margin:0 10px;border-radius:2px}
+  .stp.done .dot,.stp.cur .dot{border-color:var(--accent);background:var(--accent);color:#fff}
+  .stp.cur .lbl,.stp.done .lbl{color:var(--ink)}
+  .stp.clk{cursor:pointer}
+  @media(max-width:560px){ .stp .lbl{display:none} .stp .bar{margin:0 6px} }
+
+  .step{display:none;animation:rise .22s ease}
+  .step.active{display:block}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  h2.q{font-size:24px;font-weight:600;letter-spacing:-.02em;margin:6px 0 4px}
+  p.lead{color:var(--sub);margin:0 0 22px}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        box-shadow:var(--shadow)}
+  .pad{padding:20px}
+
+  input,select{font-family:inherit;font-size:15px;color:var(--ink);background:var(--card);
+       border:1px solid var(--line);border-radius:11px;padding:11px 13px;width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .field{display:flex;flex-direction:column;gap:7px}
+  .field>label{font-size:13px;font-weight:600;color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:520px){ .grid2{grid-template-columns:1fr} }
+
+  .btn{font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;border:none;
+       border-radius:11px;padding:12px 20px;background:var(--accent);color:#fff;transition:.15s}
+  .btn:hover{background:#1d4ed8}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+  .btn.ghost:hover{background:#f7f8fa;border-color:#d6dae1}
+  .nav{display:flex;justify-content:space-between;gap:12px;margin-top:26px}
+  .nav .spacer{flex:1}
+
+  /* segmented */
+  .seg{display:inline-flex;background:#eef0f3;border-radius:11px;padding:3px;gap:3px}
+  .seg button{border:none;background:transparent;font-family:inherit;font-size:14px;font-weight:600;
+       color:var(--sub);padding:8px 16px;border-radius:9px;cursor:pointer}
+  .seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.08)}
+
+  /* chips */
   .chips{display:flex;flex-wrap:wrap;gap:9px}
-  .chip{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:8px 13px;cursor:pointer;
-        display:flex;gap:8px;align-items:center;transition:.12s}
-  .chip:hover{border-color:var(--accent);transform:translateY(-1px)}
-  .chip.sel{background:var(--chipsel);border-color:var(--accent)}
-  .chip .code{color:var(--dim);font-size:12px;font-variant:all-small-caps;letter-spacing:.5px}
-  .chip.sel .code{color:#93c5fd}
-  #results{margin-top:24px;display:flex;flex-direction:column;gap:14px}
-  .res{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 20px}
-  .res h3{margin:0 0 10px;font-size:17px}
-  .leg{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line)}
-  .leg:last-child{border-bottom:none}
-  .leg .price{font-weight:700}
-  .total{margin-top:10px;font-size:18px;font-weight:700;color:var(--accent2)}
-  .muted{color:var(--dim)}
-  .err{color:var(--warn)}
-  a{color:#93c5fd}
-  table{width:100%;border-collapse:collapse;margin-top:6px}
-  td,th{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);font-size:14px}
-  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
-  tr:hover td{background:var(--panel2)}
-  .rank{color:var(--dim);width:34px}
-  .price-cell{font-weight:700;color:var(--accent2)}
-  .spin{display:inline-block;width:16px;height:16px;border:2px solid #ffffff55;border-top-color:#fff;
-        border-radius:50%;animation:s .7s linear infinite;vertical-align:-3px;margin-right:8px}
-  @keyframes s{to{transform:rotate(360deg)}}
-  .note{background:#1a1300;border:1px solid #4d3a00;color:#fcd34d;border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:16px}
-  .stay{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--line);
-        border-radius:10px;margin:6px 0;cursor:pointer;transition:.12s}
-  .stay:hover{border-color:var(--accent)}
-  .stay.selstay{background:var(--chipsel);border-color:var(--accent2)}
-  .badge{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:6px;
-         padding:2px 8px;font-size:11px;color:#93c5fd;margin-right:8px;text-transform:uppercase;letter-spacing:.4px}
-  .stay.selstay .badge{color:#86efac}
-  .stayfilter{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px}
-  .stayfilter button{padding:5px 11px;font-size:12px;font-weight:600;background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
-  .stayfilter button.on{background:var(--chipsel);color:#cfe3ff;border-color:var(--accent)}
-  details.more{margin:4px 0 10px}
-  details.more summary{cursor:pointer;color:#93c5fd;font-size:13px;padding:4px 0}
-  .alt{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--dim);
-       padding:5px 10px;border-left:2px solid var(--line);margin:3px 0 3px 6px}
-  details.extras{margin:14px 0 2px;border:1px solid var(--line);border-radius:10px;padding:8px 14px}
-  details.extras summary{cursor:pointer;font-weight:600;font-size:14px}
-  .exrow{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0}
-  .exrow span{font-size:14px}
-  .exinput{width:90px;text-align:right}
+  .chip{border:1px solid var(--line);background:var(--card);border-radius:11px;padding:9px 14px;
+        cursor:pointer;font-size:14px;font-weight:500;transition:.13s;display:flex;gap:8px;align-items:center}
+  .chip:hover{border-color:#c9cfd8}
+  .chip .code{color:var(--sub);font-size:12px;font-weight:600;letter-spacing:.04em}
+  .chip.on{border-color:var(--accent);background:var(--accent-soft)}
+  .chip.on .code{color:var(--accent)}
+
+  /* city picker */
+  .country{font-size:12px;font-weight:700;color:var(--sub);letter-spacing:.06em;text-transform:uppercase;
+           margin:18px 0 9px}
+  .picker{max-height:none}
+
+  /* traveler stepper */
+  .num{display:inline-flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .num button{width:42px;height:42px;border:none;background:var(--card);font-size:20px;cursor:pointer;color:var(--ink)}
+  .num button:hover{background:#f7f8fa}
+  .num span{min-width:46px;text-align:center;font-weight:600}
+
+  /* extras */
+  .exrow{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .exrow:last-child{border-bottom:none}
+  .exrow .meta{display:flex;flex-direction:column}
+  .exrow .meta .n{font-weight:500}
+  .exrow .meta .p{font-size:12px;color:var(--sub)}
+  .exrow input{width:96px;text-align:right}
+
+  /* results */
+  .summary{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;color:var(--sub);font-size:14px;margin-bottom:18px}
+  .summary b{color:var(--ink);font-weight:600}
+  .total-card{background:var(--ink);color:#fff;border-radius:var(--radius);padding:20px 22px;margin-bottom:20px}
+  .total-card .lab{font-size:13px;color:#b9c0cc;font-weight:500}
+  .total-card .big{font-size:32px;font-weight:700;letter-spacing:-.02em;margin-top:2px}
+  .total-card .sub{font-size:12px;color:#9aa3b2;margin-top:4px}
+
+  .sect-title{font-size:13px;font-weight:700;color:var(--sub);letter-spacing:.05em;text-transform:uppercase;margin:22px 2px 10px}
+  .leg{display:flex;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .leg:last-of-type{border-bottom:none}
+  .leg .wh{font-weight:600}
+  .leg .det{color:var(--sub);font-size:13px;margin-top:2px}
+  .leg .price{font-weight:600;white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;background:#eef0f3;color:var(--sub)}
+  .tag.ok{background:#e7f7ef;color:var(--ok)}
+  details.more{margin:8px 0 2px}
+  details.more summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;list-style:none}
+  details.more summary::-webkit-details-marker{display:none}
+  .alt{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--sub);
+       padding:7px 0 7px 12px;border-left:2px solid var(--line);margin:6px 0}
+
+  .break{margin-top:14px;border-top:1px dashed var(--line);padding-top:12px}
+  .break .row{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
+  .break .row.t{font-weight:700;font-size:16px;border-top:1px solid var(--line);margin-top:6px;padding-top:10px}
+  .book{margin-top:14px}
+
+  .stayfilter{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .stayfilter button{border:1px solid var(--line);background:var(--card);border-radius:999px;
+       padding:6px 13px;font-size:13px;font-weight:600;color:var(--sub);cursor:pointer}
+  .stayfilter button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  .stay{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;
+        border:1px solid var(--line);border-radius:12px;margin-bottom:9px;cursor:pointer;transition:.13s}
+  .stay:hover{border-color:#c9cfd8}
+  .stay.on{border-color:var(--ok);background:#f1faf5}
+  .stay .badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;
+       background:#eef0f3;color:var(--sub);margin-right:9px}
+  .stay.on .badge{background:#e7f7ef;color:var(--ok)}
+  .stay .nm{font-weight:500}
+  .stay .pr{font-weight:600;white-space:nowrap}
+
+  .note{background:var(--warn-bg);border:1px solid #f3e3b3;color:var(--warn);border-radius:12px;
+        padding:11px 14px;font-size:13px;margin:14px 0}
+  .muted{color:var(--sub)}
+  .spin{width:18px;height:18px;border:2px solid #c9cfd8;border-top-color:var(--accent);border-radius:50%;
+        display:inline-block;animation:sp .7s linear infinite;vertical-align:-3px;margin-right:9px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  table{width:100%;border-collapse:collapse}
+  td,th{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:14px}
+  th{font-size:12px;color:var(--sub);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  td.pr{font-weight:700;text-align:right}
 </style>
 </head>
 <body>
-<header>
-  <h1>✈ Trip Finder</h1>
-  <span class="sub">Pick a destination, find the cheapest flights from Iași / Chișinău</span>
-</header>
-
 <div class="wrap">
-  <div class="note">Flight prices are Aviasales' free <b>cached</b> fares — great for comparing destinations & spotting deals, but <b>often lower than the real bookable price</b> (always confirm via the booking link). Routes, durations & stops are accurate. Stays are scraped live from <b>Airbnb</b>. Chișinău (KIV) has no flight data, so Iași is your origin.</div>
-
-  <div class="card">
-    <div class="controls">
-      <label class="fld">Trip type
-        <select id="type">
-          <option value="return">Return (round trip)</option>
-          <option value="oneway">One-way</option>
-        </select>
-      </label>
-      <label class="fld">Depart from
-        <input type="date" id="from">
-      </label>
-      <label class="fld">Depart by
-        <input type="date" id="to">
-      </label>
-      <label class="fld">Min nights
-        <input type="number" id="nmin" min="1" value="3">
-      </label>
-      <label class="fld">Max nights
-        <input type="number" id="nmax" min="1" value="7">
-      </label>
-      <label class="fld">Travelers
-        <input type="number" id="travelers" min="1" value="1">
-      </label>
-      <label class="fld">Fly from
-        <div class="origins" id="origins"></div>
-      </label>
-    </div>
-
-    <div id="extrasbox"></div>
-
-    <div class="search-row">
-      <input id="filter" placeholder="🔎 Filter countries or cities…">
-    </div>
-
-    <div class="selbar">
-      <span class="muted">Selected:</span>
-      <span class="pill" id="selpill">— none —</span>
-      <button class="btn" id="go" disabled>Find cheapest flights</button>
-      <button class="btn alt" id="cmp">Compare ALL destinations</button>
-    </div>
-
-    <div id="picker"></div>
+  <div class="brand">
+    <div class="mark">T</div>
+    <h1>Trip Finder</h1><span>cheapest flights + places to stay</span>
   </div>
 
-  <div id="results"></div>
+  <div class="stepper" id="stepper"></div>
+
+  <!-- STEP 1 : destination -->
+  <section class="step" data-s="1">
+    <h2 class="q">Where do you want to go?</h2>
+    <p class="lead">Pick a destination. You can also compare every city at once.</p>
+    <input id="filter" placeholder="Search a country or city">
+    <div style="margin:10px 2px 2px"><a id="cmpLink" href="#">Not sure? Compare all destinations &rarr;</a></div>
+    <div class="picker" id="picker"></div>
+  </section>
+
+  <!-- STEP 2 : details -->
+  <section class="step" data-s="2">
+    <h2 class="q">Trip details</h2>
+    <p class="lead" id="d2sum"></p>
+    <div class="card pad">
+      <div class="field" style="margin-bottom:18px">
+        <label>Flying from</label>
+        <div class="chips" id="origins"></div>
+      </div>
+      <div class="field" style="margin-bottom:18px">
+        <label>Trip type</label>
+        <div class="seg" id="triptype">
+          <button data-v="return" class="on">Return</button>
+          <button data-v="oneway">One-way</button>
+        </div>
+      </div>
+      <div class="grid2" style="margin-bottom:18px">
+        <div class="field"><label>Depart between</label><input type="date" id="from"></div>
+        <div class="field"><label>and</label><input type="date" id="to"></div>
+      </div>
+      <div class="grid2" style="margin-bottom:18px">
+        <div class="field"><label>Min nights</label><input type="number" id="nmin" min="1" value="3"></div>
+        <div class="field"><label>Max nights</label><input type="number" id="nmax" min="1" value="7"></div>
+      </div>
+      <div class="field">
+        <label>Travelers</label>
+        <div class="num"><button id="tdn" type="button">&minus;</button><span id="tval">1</span><button id="tup" type="button">+</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 3 : extras -->
+  <section class="step" data-s="3">
+    <h2 class="q">Extra costs</h2>
+    <p class="lead">Edit to match your trip. Set anything to 0 to leave it out. Added to your total.</p>
+    <div class="note">Baggage is your own estimate, not from the airline. The real baggage-inclusive
+      price shows on the booking page. Set "Checked bag" to match your airline, or 0 for cabin-only.</div>
+    <div class="card pad" id="extrasbox"></div>
+  </section>
+
+  <!-- STEP 4 : results -->
+  <section class="step" data-s="4">
+    <div id="results"></div>
+  </section>
+
+  <div class="nav" id="nav"></div>
 </div>
 
 <script>
-let CUR = "EUR", SEL = null, COUNTRIES = [], EXTRAS = [];
-
-async function boot(){
-  const r = await fetch("/api/cities"); const d = await r.json();
-  CUR = d.currency; COUNTRIES = d.countries; EXTRAS = d.extras || [];
-  document.getElementById("from").value = d.defaults.depart_from;
-  document.getElementById("to").value = d.defaults.depart_to;
-  document.getElementById("nmin").value = d.defaults.nights_min;
-  document.getElementById("nmax").value = d.defaults.nights_max;
-  document.getElementById("travelers").value = d.defaults.travelers || 1;
-  const ob = document.getElementById("origins");
-  d.origins.forEach((o,i)=>{
-    const id="o_"+o;
-    ob.insertAdjacentHTML("beforeend",
-      `<label><input type="checkbox" value="${o}" ${i===0?"checked":""}> ${o}</label>`);
-  });
-  renderExtras();
-  renderPicker("");
-  document.getElementById("results").innerHTML =
-    `<div class="res muted">👇 Pick a city above (the chip turns blue), then click the blue <b>Find cheapest flights</b> button.
-     Your results — the ✈️ flights <b>and</b> a 🏠 <b>Places to stay</b> list (Airbnb homes, rooms, hotels, hostels…) — show up right here.</div>`;
-}
-
-function renderPicker(q){
-  q = q.trim().toLowerCase();
-  const box = document.getElementById("picker"); box.innerHTML = "";
-  COUNTRIES.forEach(c=>{
-    const cities = c.cities.filter(ct =>
-      !q || c.country.toLowerCase().includes(q) || ct.city.toLowerCase().includes(q));
-    if(!cities.length) return;
-    const sec = document.createElement("div");
-    sec.innerHTML = `<div class="country">${c.country}</div>`;
-    const chips = document.createElement("div"); chips.className="chips";
-    cities.forEach(ct=>{
-      const el = document.createElement("div");
-      el.className = "chip" + (SEL===ct.city?" sel":"");
-      el.innerHTML = `<span>${ct.city}</span><span class="code">${ct.airport}</span>`;
-      el.onclick = ()=>{ SEL = ct.city; updateSel(); renderPicker(document.getElementById("filter").value); };
-      chips.appendChild(el);
-    });
-    sec.appendChild(chips); box.appendChild(sec);
-  });
-}
-
-function updateSel(){
-  document.getElementById("selpill").textContent = SEL || "— none —";
-  document.getElementById("go").disabled = !SEL;
-}
-
-function perLabel(p){return {trip:"per trip",person:"per person",night:"per night",person_night:"per person/night"}[p]||p;}
-function renderExtras(){
-  const box=document.getElementById("extrasbox");
-  if(!EXTRAS.length){ box.innerHTML=""; return; }
-  box.innerHTML = `<details class="extras" open><summary>➕ Extra costs (edit to fit your trip — added to the total)</summary>`+
-    `<div class="muted" style="font-size:12px;margin:2px 0 8px">Baggage is <b>your estimate</b>, not from Aviasales (the cached price excludes bags). The real baggage-inclusive price shows on the booking page — set the "Checked bag" amount to match your airline, or 0 for cabin-only.</div>`+
-    EXTRAS.map((e,i)=>`<div class="exrow"><span>${e.name} <span class="muted">(${CUR} ${perLabel(e.per)})</span></span>
-      <input type="number" min="0" step="1" class="exinput" data-i="${i}" value="${e.amount}"></div>`).join("")+`</details>`;
-  box.querySelectorAll(".exinput").forEach(inp=> inp.oninput=()=>{ EXTRAS[+inp.dataset.i].amount = Number(inp.value)||0; });
-}
-
-function origins(){
-  return [...document.querySelectorAll("#origins input:checked")].map(x=>x.value);
-}
-function form(extra){
-  return Object.assign({
-    type: document.getElementById("type").value,
-    depart_from: document.getElementById("from").value,
-    depart_to: document.getElementById("to").value,
-    nights_min: document.getElementById("nmin").value,
-    nights_max: document.getElementById("nmax").value,
-    travelers: document.getElementById("travelers").value,
-    origins: origins(),
-    extras: EXTRAS,
-  }, extra);
-}
-function money(n){ return n + " " + CUR; }
-function dur(m){ if(!m) return "?"; const h=Math.floor(m/60), mm=m%60; return h? h+"h"+String(mm).padStart(2,"0") : mm+"m"; }
-function routeTxt(leg){ return (leg.route||[]).join(" → "); }
-function stopsTxt(leg){
-  const via=leg.stops||[];
-  if(via.length){ return "🔁 "+via.length+" stop"+(via.length>1?"s":"")+" via "+via.join(", "); }
-  return leg.transfers ? ("🔁 "+leg.transfers+" stop"+(leg.transfers>1?"s":"")) : "✅ direct";
-}
-
+const $ = id => document.getElementById(id);
+let CUR="EUR", COUNTRIES=[], ORIGINS=[], EXTRAS=[], SEL=null, STEP=1, MODE="plan";
 let LAST=null, SELSTAY=null, STAYFILTER="All";
+const STEPS=["Destination","Details","Extra costs","Your trip"];
 
-async function search(){
-  if(!SEL) return;
-  if(!origins().length){ alert("Tick at least one 'Fly from' airport."); return; }
-  const res = document.getElementById("results");
-  res.innerHTML = `<div class="res"><span class="spin"></span>Searching ${SEL} (flights + places to stay)…</div>`;
-  const r = await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},
-                        body:JSON.stringify(form({destination:SEL}))});
-  const d = await r.json();
-  if(d.error){ res.innerHTML = `<div class="res err">Error: ${d.error}</div>`; return; }
-  LAST = d; STAYFILTER="All";
-  const opts = stayOptions();
-  SELSTAY = opts.length ? opts[0] : null;
+/* ---------- helpers ---------- */
+function money(n){ return n + " " + CUR; }
+function dur(m){ if(!m) return "—"; const h=Math.floor(m/60),mm=m%60; return h? h+"h "+String(mm).padStart(2,"0") : mm+"m"; }
+function routeTxt(l){ return (l.route||[]).join(" → "); }
+function stopsTxt(l){ const v=l.stops||[]; if(v.length) return v.length+" stop"+(v.length>1?"s":"")+" via "+v.join(", ");
+  return l.transfers ? l.transfers+" stop"+(l.transfers>1?"s":"") : "direct"; }
+function perLabel(p){ return {trip:"per trip",person:"per person",night:"per night",person_night:"per person/night"}[p]||p; }
+
+/* ---------- boot ---------- */
+async function boot(){
+  const d = await (await fetch("/api/cities")).json();
+  CUR=d.currency; COUNTRIES=d.countries; ORIGINS=d.origins; EXTRAS=d.extras||[];
+  $("from").value=d.defaults.depart_from; $("to").value=d.defaults.depart_to;
+  $("nmin").value=d.defaults.nights_min; $("nmax").value=d.defaults.nights_max;
+  travelers=d.defaults.travelers||1; $("tval").textContent=travelers;
+  $("origins").innerHTML = ORIGINS.map((o,i)=>`<div class="chip ${i===0?'on':''}" data-o="${o}">${o}</div>`).join("");
+  $("origins").querySelectorAll(".chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
+  $("triptype").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    $("triptype").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); });
+  renderExtras(); renderPicker(""); renderStepper(); goStep(1);
+}
+
+let travelers=1;
+$("tup").onclick=()=>{ travelers++; $("tval").textContent=travelers; };
+$("tdn").onclick=()=>{ if(travelers>1){ travelers--; $("tval").textContent=travelers; } };
+$("filter").addEventListener("input",e=>renderPicker(e.target.value));
+$("cmpLink").onclick=e=>{ e.preventDefault(); MODE="compare"; goStep(4); doCompare(); };
+
+/* ---------- stepper ---------- */
+function renderStepper(){
+  $("stepper").innerHTML = STEPS.map((s,i)=>{
+    const n=i+1, cls = n<STEP?"done":(n===STEP?"cur":"");
+    const clk = n<STEP ? "clk":"";
+    return `<div class="stp ${cls} ${clk}" data-go="${n}">
+        <div class="dot">${n}</div><div class="lbl">${s}</div>
+      </div>${ n<STEPS.length ? '<div class="bar"></div>' : '' }`;
+  }).join("");
+  $("stepper").querySelectorAll(".stp.clk").forEach(el=>el.onclick=()=>goStep(+el.dataset.go));
+}
+
+function goStep(n){
+  STEP=n; MODE = n===4 && MODE==="compare" ? "compare" : (n===4?"plan":MODE);
+  document.querySelectorAll(".step").forEach(s=>s.classList.toggle("active", +s.dataset.s===n));
+  renderStepper(); renderNav();
+  if(n===2) $("d2sum").innerHTML = SEL ? `Going to <b>${SEL}</b>` : "";
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+
+function renderNav(){
+  const nav=$("nav");
+  if(STEP===1){ nav.innerHTML=""; return; }
+  if(STEP===4){
+    nav.innerHTML = `<button class="btn ghost" onclick="goStep(1)">Start over</button>
+       <div class="spacer"></div>${ MODE==="compare" ? "" : '<button class="btn ghost" onclick="goStep(3)">Edit</button>'}`;
+    return;
+  }
+  const next = STEP===3 ? "Find my trip" : "Continue";
+  nav.innerHTML = `<button class="btn ghost" onclick="goStep(${STEP-1})">Back</button>
+     <div class="spacer"></div><button class="btn" id="nextBtn">${next} &rarr;</button>`;
+  $("nextBtn").onclick = ()=>{
+    if(STEP===2 && !originsSel().length){ alert("Pick at least one airport to fly from."); return; }
+    if(STEP===3){ MODE="plan"; goStep(4); doSearch(); } else goStep(STEP+1);
+  };
+}
+
+/* ---------- step 1 picker ---------- */
+function renderPicker(q){
+  q=(q||"").trim().toLowerCase();
+  $("picker").innerHTML = COUNTRIES.map(c=>{
+    const cities=c.cities.filter(ct=>!q||c.country.toLowerCase().includes(q)||ct.city.toLowerCase().includes(q));
+    if(!cities.length) return "";
+    return `<div class="country">${c.country}</div><div class="chips">`+
+      cities.map(ct=>`<div class="chip ${SEL===ct.city?'on':''}" data-c="${ct.city}">
+        ${ct.city}<span class="code">${ct.airport}</span></div>`).join("")+`</div>`;
+  }).join("");
+  $("picker").querySelectorAll(".chip").forEach(el=>el.onclick=()=>{ SEL=el.dataset.c; MODE="plan"; goStep(2); });
+}
+
+/* ---------- step 3 extras ---------- */
+function renderExtras(){
+  $("extrasbox").innerHTML = EXTRAS.map((e,i)=>`
+    <div class="exrow"><div class="meta"><span class="n">${e.name}</span>
+      <span class="p">${CUR} ${perLabel(e.per)}</span></div>
+      <input type="number" min="0" step="1" data-i="${i}" value="${e.amount}"></div>`).join("");
+  $("extrasbox").querySelectorAll("input").forEach(inp=>inp.oninput=()=>{ EXTRAS[+inp.dataset.i].amount=Number(inp.value)||0; });
+}
+
+/* ---------- request ---------- */
+function originsSel(){ return [...$("origins").querySelectorAll(".chip.on")].map(c=>c.dataset.o); }
+function tripType(){ return $("triptype").querySelector("button.on").dataset.v; }
+function body(extra){
+  return Object.assign({ type:tripType(), depart_from:$("from").value, depart_to:$("to").value,
+    nights_min:$("nmin").value, nights_max:$("nmax").value, travelers, origins:originsSel(), extras:EXTRAS }, extra);
+}
+
+async function doSearch(){
+  $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Finding flights and places to stay in ${SEL}…</div>`;
+  const d = await (await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body({destination:SEL}))})).json();
+  if(d.error){ $("results").innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
+  LAST=d; STAYFILTER="All";
+  const opts=stayOptions(); SELSTAY=opts.length?opts[0]:null;
   renderResults();
 }
 
-function stayOptions(){
-  return (LAST && LAST.stay && LAST.stay.options) ? LAST.stay.options : (LAST&&LAST.stay ? [LAST.stay] : []);
+function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.options : (LAST&&LAST.stay?[LAST.stay]:[]); }
+
+/* ---------- results ---------- */
+function legRow(where, l, extra){
+  return `<div class="leg"><div><div class="wh">${where} · ${l.date}</div>
+      <div class="det">${routeTxt(l)} · ${dur(l.duration)} · <span class="tag ${l.stops&&l.stops.length||l.transfers?'':'ok'}">${stopsTxt(l)}</span> · ${l.airline}${extra||""}</div></div>
+      <div class="price">${money(l.price)}</div></div>`;
+}
+function altBlock(opts,label){
+  const more=(opts||[]).slice(1); if(!more.length) return "";
+  return `<details class="more"><summary>Show ${more.length} more ${label} dates</summary>`+
+    more.map(l=>`<div class="alt"><span>${l.date} · ${routeTxt(l)} · ${dur(l.duration)} · ${stopsTxt(l)}</span><span>${money(l.price)}</span></div>`).join("")+`</details>`;
 }
 
-function legAlt(leg){
-  return `<div class="alt"><span>${leg.date} · ${routeTxt(leg)} · ⏱ ${dur(leg.duration)} · ${stopsTxt(leg)} · ${leg.airline}</span><span class="muted">${money(leg.price)}</span></div>`;
-}
-function altBlock(opts, kindLabel){
-  const more = (opts||[]).slice(1);
-  if(!more.length) return ``;
-  return `<details class="more"><summary>+ ${more.length} other ${kindLabel} dates (2nd, 3rd cheapest…)</summary>${more.map(legAlt).join("")}</details>`;
-}
-
-function flightCard(x, label, stayTotal){
-  if(x.error){
-    return `<div class="res"><h3>${x.name} <span class="code">(${x.origin})</span></h3><div class="err">${x.error}</div></div>`;
-  }
-  const bk = x.one_way ? `` : (x.back
-    ? `<div class="leg"><span>↩ Return &nbsp;<b>${x.back.date}</b><br><span class="muted">${routeTxt(x.back)} · ⏱ ${dur(x.back.duration)} · ${stopsTxt(x.back)} · ${x.back.airline} · ${x.actual_nights} nights</span></span><span class="price">${money(x.back.price)}</span></div>${altBlock(x.back_options,"return")}`
-    : `<div class="leg err"><span>↩ Return — none found in window</span><span></span></div>`);
-  const kind = x.one_way ? "one-way" : "round trip";
-  return `<div class="res"><h3>${x.name} → ${label} <span class="muted" style="font-size:13px">(${x.travelers} traveler${x.travelers>1?"s":""}, ${kind})</span></h3>
-    <div class="leg"><span>🛫 Outbound &nbsp;<b>${x.out.date}</b><br><span class="muted">${routeTxt(x.out)} · ⏱ ${dur(x.out.duration)} · ${stopsTxt(x.out)} · ${x.out.airline}</span></span><span class="price">${money(x.out.price)}</span></div>
+function flightCard(x){
+  if(x.error) return `<div class="card pad"><b>${x.name} (${x.origin})</b><div class="muted" style="margin-top:6px">${x.error}</div></div>`;
+  const stay = SELSTAY ? SELSTAY.stay_total : 0;
+  const extras=(x.extras||[]).filter(e=>e.total>0);
+  const tot = Math.round((x.flight_total+(x.extras_total||0)+stay)*100)/100;
+  return `<div class="card pad" style="margin-bottom:16px">
+    <div style="font-weight:600;font-size:16px;margin-bottom:6px">${x.name} → ${LAST.label}
+      <span class="muted" style="font-weight:400;font-size:13px">· ${x.one_way?"one-way":"round trip"} · ${x.travelers} traveler${x.travelers>1?"s":""}</span></div>
+    ${legRow("Outbound", x.out)}
     ${altBlock(x.out_options,"outbound")}
-    ${bk}
-    <div class="leg"><span>Flights total <span class="muted" style="font-size:12px">(baggage not included)</span></span><span>${money(x.flight_total)}</span></div>
-    ${stayTotal ? `<div class="leg"><span>🏠 Stay</span><span>${money(stayTotal)}</span></div>` : ``}
-    ${(x.extras||[]).filter(e=>e.total>0).map(e=>`<div class="leg"><span>➕ ${e.name}</span><span class="muted">+${money(e.total)}</span></div>`).join("")}
-    <div class="total">TRIP TOTAL: ~${money(Math.round((x.flight_total+(x.extras_total||0)+stayTotal)*100)/100)} <span class="muted" style="font-size:12px;font-weight:400">cached flights est.</span></div>
-    <div class="muted" style="font-size:12px;margin-top:4px">⚠ Flight prices are Aviasales' <b>cached lowest fares</b> and are often outdated — the <b>real bookable price (usually higher) shows on the booking page</b>. Use these for comparing/spotting deals, not as the final price. Stay prices are live from Airbnb.</div>
-    <div style="margin-top:8px"><a href="${x.booking_link}" target="_blank">${x.one_way ? "Book one-way on Aviasales ↗ (see real price)" : "Book round trip on Aviasales ↗ (return included, see real price)"}</a></div></div>`;
+    ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
+       :`<div class="leg"><div class="muted">No return found in your night range — widen max nights.</div><div></div></div>`)}
+    <div class="break">
+      <div class="row"><span class="muted">Flights (cached est., bag not incl.)</span><span>${money(x.flight_total)}</span></div>
+      ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
+      ${extras.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
+      <div class="row t"><span>Trip total</span><span>~${money(tot)}</span></div>
+    </div>
+    <div class="book"><a href="${x.booking_link}" target="_blank">${x.one_way?"Book one-way on Aviasales":"Book round trip on Aviasales (return included)"} &rarr;</a></div>
+  </div>`;
 }
 
 function renderResults(){
-  const d = LAST, res = document.getElementById("results");
-  const opts = stayOptions();
-  let html = `<h2 style="margin:6px 0">Cheapest trip → ${d.label}</h2>`;
+  const d=LAST, opts=stayOptions(), sd=d.stay_dates;
+  const flying=d.results.filter(r=>!r.error);
+  const cheapestTotal = flying.length ? Math.min(...flying.map(r=>r.flight_total+(r.extras_total||0)+(SELSTAY?SELSTAY.stay_total:0))) : null;
+  let html = `<div class="summary">
+      <b>${d.results[0]? (d.results.find(r=>!r.error)||d.results[0]).name : ""} → ${d.label}</b>
+      ${sd?`· <span>${sd.check_in} – ${sd.check_out}</span> · <span>${sd.nights} nights</span>`:""}
+      · <span>${travelers} traveler${travelers>1?"s":""}</span></div>`;
+  if(cheapestTotal!=null)
+    html += `<div class="total-card"><div class="lab">Cheapest trip, all-in</div>
+      <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
+      <div class="sub">Flight prices are cached estimates — confirm the real price on the booking page.</div></div>`;
 
+  // stays
+  html += `<div class="sect-title">Places to stay${ sd?` · ${sd.nights} nights, matches the flight`:""}</div>`;
   if(opts.length){
-    const types = ["All", ...Array.from(new Set(opts.map(o=>o.type)))];
-    const shown = opts.filter(o=> STAYFILTER==="All" || o.type===STAYFILTER);
-    const sd = d.stay_dates;
-    const dates = sd ? ` · ${sd.check_in} → ${sd.check_out} (${sd.nights} nights, matches the flight)` : ``;
-    html += `<div class="res"><h3>🏠 Places to stay <span class="muted" style="font-size:13px">(${opts.length} found · tap one to use it in the total${dates})</span></h3>`;
-    html += `<div class="stayfilter">` + types.map(t=>`<button data-t="${t}" class="${t===STAYFILTER?'on':''}">${t}</button>`).join("") + `</div>`;
-    html += shown.map((o)=>{
-      const gi = opts.indexOf(o);
-      const sel = SELSTAY && SELSTAY===o;
-      const lnk = o.link ? ` <a href="${o.link}" target="_blank" onclick="event.stopPropagation()">↗</a>` : "";
-      return `<div class="stay ${sel?'selstay':''}" data-i="${gi}">
-        <span><span class="badge">${o.type||'Stay'}</span>${o.name}${lnk}</span>
-        <span class="price">${money(o.stay_total)} <span class="muted">(${money(o.per_night)}/n)</span></span></div>`;
+    const types=["All",...new Set(opts.map(o=>o.type))];
+    html += `<div class="stayfilter">`+types.map(t=>`<button data-t="${t}" class="${t===STAYFILTER?'on':''}">${t}</button>`).join("")+`</div>`;
+    html += opts.filter(o=>STAYFILTER==="All"||o.type===STAYFILTER).map(o=>{
+      const gi=opts.indexOf(o), on=SELSTAY===o;
+      const lk=o.link?` · <a href="${o.link}" target="_blank" onclick="event.stopPropagation()">view</a>`:"";
+      return `<div class="stay ${on?'on':''}" data-i="${gi}"><div class="nm"><span class="badge">${o.type||'Stay'}</span>${o.name}${lk}</div>
+        <div class="pr">${money(o.stay_total)} <span class="muted" style="font-weight:400">${money(o.per_night)}/n</span></div></div>`;
     }).join("");
-    html += `</div>`;
   } else {
-    html += `<div class="note">No place to stay found for these dates — showing flights only.</div>`;
+    html += `<div class="note">No place to stay found for these dates. Airbnb may be rate-limiting — try again shortly. Showing flights only.</div>`;
   }
 
-  const stayTotal = SELSTAY ? SELSTAY.stay_total : 0;
-  html += d.results.map(x=>flightCard(x, d.label, stayTotal)).join("");
-  res.innerHTML = html;
+  // flights
+  html += `<div class="sect-title">Flights</div>` + d.results.map(flightCard).join("");
+  $("results").innerHTML = html;
 
-  res.querySelectorAll(".stay").forEach(el=> el.onclick = ()=>{ SELSTAY = opts[+el.dataset.i]; renderResults(); });
-  res.querySelectorAll(".stayfilter button").forEach(b=> b.onclick = ()=>{ STAYFILTER = b.dataset.t; renderResults(); });
+  $("results").querySelectorAll(".stay").forEach(el=>el.onclick=()=>{ SELSTAY=opts[+el.dataset.i]; renderResults(); });
+  $("results").querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; renderResults(); });
 }
 
-async function compare(){
-  if(!origins().length){ alert("Tick at least one 'Fly from' airport."); return; }
-  const res = document.getElementById("results");
-  res.innerHTML = `<div class="res"><span class="spin"></span>Comparing every destination… (this takes ~30–60s)</div>`;
-  const r = await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},
-                        body:JSON.stringify(form({}))});
-  const d = await r.json();
-  if(d.error){ res.innerHTML = `<div class="res err">Error: ${d.error}</div>`; return; }
-  let rows = d.rows.map((x,i)=>`<tr>
-      <td class="rank">${i+1}</td>
-      <td><b>${x.city}</b> <span class="muted">${x.country}</span></td>
-      <td class="muted">${x.name}</td>
-      <td class="muted">${x.out||""}${x.back? " → "+x.back : ""}${x.nights!=null? " ("+x.nights+"n)":""}</td>
-      <td class="price-cell">${money(x.total)}</td>
-    </tr>`).join("");
-  res.innerHTML = `<div class="res"><h3>Cheapest round-trip flights, all destinations</h3>
-    <table><thead><tr><th>#</th><th>Destination</th><th>From</th><th>Dates</th><th>Total</th></tr></thead>
-    <tbody>${rows||"<tr><td colspan=5 class='muted'>No results</td></tr>"}</tbody></table></div>`;
+/* ---------- compare ---------- */
+async function doCompare(){
+  $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Comparing every destination… this takes about a minute.</div>`;
+  const d = await (await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body({}))})).json();
+  if(d.error){ $("results").innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
+  const rows=d.rows.map((x,i)=>`<tr><td class="muted">${i+1}</td>
+     <td><b>${x.city}</b> <span class="muted">${x.country}</span></td>
+     <td class="muted">${x.name}</td>
+     <td class="muted">${x.out||""}${x.back?" → "+x.back:""}${x.nights!=null?" · "+x.nights+"n":""}</td>
+     <td class="pr">${money(x.total)}</td></tr>`).join("");
+  $("results").innerHTML = `<h2 class="q">Cheapest destinations</h2>
+     <p class="lead">Round-trip flights only, ranked. Cached estimates — confirm live.</p>
+     <div class="card pad"><table><thead><tr><th>#</th><th>Destination</th><th>From</th><th>Dates</th><th style="text-align:right">Flights</th></tr></thead>
+     <tbody>${rows||`<tr><td colspan="5" class="muted">No results.</td></tr>`}</tbody></table></div>`;
 }
 
-document.getElementById("filter").addEventListener("input", e=>renderPicker(e.target.value));
-document.getElementById("go").addEventListener("click", search);
-document.getElementById("cmp").addEventListener("click", compare);
 boot();
 </script>
 </body>
