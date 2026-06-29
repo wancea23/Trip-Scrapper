@@ -124,6 +124,9 @@
   .alt{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--sub);
        padding:7px 0 7px 12px;border-left:2px solid var(--line);margin:6px 0}
 
+  .bagopt{display:flex;align-items:center;gap:9px;margin:12px 0 0;font-size:14px;font-weight:500;cursor:pointer;
+       background:var(--accent-soft);border:1px solid #d6e2ff;border-radius:11px;padding:11px 13px}
+  .bagopt input{width:auto;accent-color:var(--accent)}
   .break{margin-top:14px;border-top:1px dashed var(--line);padding-top:12px}
   .break .row{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
   .break .row.t{font-weight:700;font-size:16px;border-top:1px solid var(--line);margin-top:6px;padding-top:10px}
@@ -224,7 +227,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let CUR="EUR", COUNTRIES=[], ORIGINS=[], EXTRAS=[], SEL=null, STEP=1, MODE="plan";
-let LAST=null, SELSTAY=null, STAYFILTER="All";
+let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=true;
 const STEPS=["Destination","Details","Extra costs","Your trip"];
 
 /* ---------- helpers ---------- */
@@ -234,6 +237,10 @@ function routeTxt(l){ return (l.route||[]).join(" → "); }
 function stopsTxt(l){ const v=l.stops||[]; if(v.length) return v.length+" stop"+(v.length>1?"s":"")+" via "+v.join(", ");
   return l.transfers ? l.transfers+" stop"+(l.transfers>1?"s":"") : "direct"; }
 function perLabel(p){ return {trip:"per trip",person:"per person",night:"per night",person_night:"per person/night"}[p]||p; }
+function bagOf(r){ const b=(r.extras||[]).find(e=>/bag/i.test(e.name)); return b?b.total:0; }
+function otherExtras(r){ return (r.extras||[]).filter(e=>!/bag/i.test(e.name) && e.total>0); }
+function tripTotal(r){ const stay=SELSTAY?SELSTAY.stay_total:0;
+  return r.flight_total + (BAG_ON?bagOf(r):0) + otherExtras(r).reduce((s,e)=>s+e.total,0) + stay; }
 
 /* ---------- boot ---------- */
 async function boot(){
@@ -336,9 +343,10 @@ function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.op
 
 /* ---------- results ---------- */
 function legRow(where, l, extra){
+  const pp = travelers>1 ? '<span class="muted" style="font-weight:400;font-size:12px"> /person</span>' : '';
   return `<div class="leg"><div><div class="wh">${where} · ${l.date}</div>
       <div class="det">${routeTxt(l)} · ${dur(l.duration)} · <span class="tag ${l.stops&&l.stops.length||l.transfers?'':'ok'}">${stopsTxt(l)}</span> · ${l.airline}${extra||""}</div></div>
-      <div class="price">${money(l.price)}</div></div>`;
+      <div class="price">${money(l.price)}${pp}</div></div>`;
 }
 function altBlock(opts,label){
   const more=(opts||[]).slice(1); if(!more.length) return "";
@@ -348,38 +356,45 @@ function altBlock(opts,label){
 
 function flightCard(x){
   if(x.error) return `<div class="card pad"><b>${x.name} (${x.origin})</b><div class="muted" style="margin-top:6px">${x.error}</div></div>`;
-  const stay = SELSTAY ? SELSTAY.stay_total : 0;
-  const extras=(x.extras||[]).filter(e=>e.total>0);
-  const tot = Math.round((x.flight_total+(x.extras_total||0)+stay)*100)/100;
+  const ttl = x.travelers, stay = SELSTAY ? SELSTAY.stay_total : 0;
+  const bag = bagOf(x), others = otherExtras(x), bagInc = BAG_ON && bag>0;
+  const noReturn = !x.one_way && !x.back;
+  const tot = Math.round(tripTotal(x)*100)/100;
+  const kind = x.one_way ? "one-way" : (noReturn ? "round trip, no return found" : "round trip");
+  const bagToggle = bag>0 ? `<label class="bagopt"><input type="checkbox" class="bagchk" ${BAG_ON?"checked":""}>
+       Include checked bag (+${money(bag)}${ttl>1?` for ${ttl} travelers`:""})</label>` : "";
+  const flightsLab = `Flights, no bag` + (ttl>1?` (${ttl} travelers)`:"");
   return `<div class="card pad" style="margin-bottom:16px">
     <div style="font-weight:600;font-size:16px;margin-bottom:6px">${x.name} → ${LAST.label}
-      <span class="muted" style="font-weight:400;font-size:13px">· ${x.one_way?"one-way":"round trip"} · ${x.travelers} traveler${x.travelers>1?"s":""}</span></div>
+      <span class="muted" style="font-weight:400;font-size:13px">· ${kind} · ${ttl} traveler${ttl>1?"s":""}</span></div>
     ${legRow("Outbound", x.out)}
     ${altBlock(x.out_options,"outbound")}
     ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
-       :`<div class="leg"><div class="muted">No return found in your night range — widen max nights.</div><div></div></div>`)}
+       :`<div class="note" style="margin:10px 0">No return flight in your night range, so this total is the <b>outbound only</b>. Widen "Max nights" (step 2) or your dates.</div>`)}
+    ${bagToggle}
     <div class="break">
-      <div class="row"><span class="muted">Flights (cached est., bag not incl.)</span><span>${money(x.flight_total)}</span></div>
+      <div class="row"><span class="muted">${flightsLab}</span><span>${money(x.flight_total)}</span></div>
+      ${bagInc?`<div class="row"><span class="muted">Checked bag</span><span>${money(bag)}</span></div>`:""}
+      ${others.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
       ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
-      ${extras.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
-      <div class="row t"><span>Trip total</span><span>~${money(tot)}</span></div>
+      <div class="row t"><span>${noReturn?"Total (outbound only)":"Trip total"}</span><span>~${money(tot)}</span></div>
     </div>
-    <div class="book"><a href="${x.booking_link}" target="_blank">${x.one_way?"Book one-way on Aviasales":"Book round trip on Aviasales (return included)"} &rarr;</a></div>
+    <div class="book"><a href="${x.booking_link}" target="_blank">${x.one_way?"Book one-way on Aviasales":"Book round trip on Aviasales (return included)"} &rarr; <span class="muted">(see real price)</span></a></div>
   </div>`;
 }
 
 function renderResults(){
   const d=LAST, opts=stayOptions(), sd=d.stay_dates;
   const flying=d.results.filter(r=>!r.error);
-  const cheapestTotal = flying.length ? Math.min(...flying.map(r=>r.flight_total+(r.extras_total||0)+(SELSTAY?SELSTAY.stay_total:0))) : null;
+  const cheapestTotal = flying.length ? Math.min(...flying.map(tripTotal)) : null;
   let html = `<div class="summary">
       <b>${d.results[0]? (d.results.find(r=>!r.error)||d.results[0]).name : ""} → ${d.label}</b>
       ${sd?`· <span>${sd.check_in} – ${sd.check_out}</span> · <span>${sd.nights} nights</span>`:""}
       · <span>${travelers} traveler${travelers>1?"s":""}</span></div>`;
   if(cheapestTotal!=null)
-    html += `<div class="total-card"><div class="lab">Cheapest trip, all-in</div>
+    html += `<div class="total-card"><div class="lab">Cheapest trip, all-in${BAG_ON?" (incl. bag)":""}</div>
       <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
-      <div class="sub">Flight prices are cached estimates — confirm the real price on the booking page.</div></div>`;
+      <div class="sub">Flight prices are <b>cached</b> and usually <b>lower than the real bookable price</b> — always confirm on the booking page. Stay prices are live from Airbnb.</div></div>`;
 
   // stays
   html += `<div class="sect-title">Places to stay${ sd?` · ${sd.nights} nights, matches the flight`:""}</div>`;
@@ -402,6 +417,7 @@ function renderResults(){
 
   $("results").querySelectorAll(".stay").forEach(el=>el.onclick=()=>{ SELSTAY=opts[+el.dataset.i]; renderResults(); });
   $("results").querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; renderResults(); });
+  $("results").querySelectorAll(".bagchk").forEach(c=>c.onchange=()=>{ BAG_ON=c.checked; renderResults(); });
 }
 
 /* ---------- compare ---------- */
