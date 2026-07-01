@@ -254,7 +254,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let CUR="EUR", COUNTRIES=[], ORIGINS=[], EXTRAS=[], SEL=null, STEP=1, MODE="plan";
-let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=true, STAY_ALL=false;
+let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=true, STAY_ALL=false, BUS_SHOW=true;
 const STEPS=["Destination","Details","Extra costs","Your trip"];
 
 /* ---------- helpers ---------- */
@@ -267,8 +267,11 @@ function perLabel(p){ return {trip:"per trip",person:"per person",night:"per nig
 function bagOf(r){ return r.bag_total||0; }
 function groundOf(r){ return r.ground ? r.ground.total : 0; }
 function otherExtras(r){ return (r.extras||[]).filter(e=>e.total>0); }
+function busBackOf(r){ // no return flight -> return home by direct bus (real FlixBus quote)
+  return (!r.one_way && !r.back && LAST && LAST.bus && LAST.bus.back)
+    ? LAST.bus.back.price * (r.travelers||1) : 0; }
 function tripTotal(r){ const stay=SELSTAY?SELSTAY.stay_total:0;
-  return r.flight_total + (BAG_ON?bagOf(r):0) + groundOf(r) + otherExtras(r).reduce((s,e)=>s+e.total,0) + stay; }
+  return r.flight_total + (BAG_ON?bagOf(r):0) + groundOf(r) + busBackOf(r) + otherExtras(r).reduce((s,e)=>s+e.total,0) + stay; }
 
 /* ---------- boot ---------- */
 async function boot(){
@@ -466,7 +469,11 @@ function flightCard(x){
     ${legRow("Outbound", x.out)}
     ${altBlock(x.out_options,"outbound")}
     ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
-       :`<div class="leg"><div class="wh">No return flight found — outbound only</div><div></div></div>`)}
+       :(LAST.bus&&LAST.bus.back
+         ?`<div class="leg"><div><div class="wh">No return flight — return by direct bus</div>
+            <div class="det">${LAST.label} → Chișinău · FlixBus · ${(LAST.bus.back.dep||"").slice(0,16).replace("T"," ")} · <a href="${LAST.bus.back.book}" target="_blank">book</a> · <a href="${LAST.bus.infobus_back}" target="_blank">more carriers</a></div></div>
+            <div class="price">${money(LAST.bus.back.price)}${x.travelers>1?'<span class="muted" style="font-weight:400;font-size:12px"> /person</span>':''}</div></div>`
+         :`<div class="leg"><div class="wh">No return flight found — outbound only</div><div></div></div>`))}
     ${bagToggle}
     ${x.ground?(()=>{ const tk=x.bag_legs*ttl; return `<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} by ${x.ground.mode}: <b>${money(x.ground.price)} × ${tk} ticket${tk>1?"s":""} = ${money(x.ground.total)}</b>
        <span class="muted" style="font-weight:400">· ${x.bag_legs>1?"there &amp; back":"one-way"}${ttl>1?`, ${ttl} travelers`:""}, ~${x.ground.hours}h each way · <a href="${x.ground.book}" target="_blank">exact price &amp; book</a></span></span></div>`; })():""}
@@ -478,6 +485,7 @@ function flightCard(x){
         <div class="row"><span class="muted">Flights, no bag${ttl>1?` (${ttl} travelers)`:""}</span><span>${money(x.flight_total)}</span></div>
         ${bagInc?`<div class="row"><span class="muted">Checked bag (${x.bag_airline} est.)</span><span>${money(bag)}</span></div>`:""}
         ${x.ground?`<div class="row"><span class="muted">Chișinău → ${x.ground.to} (${x.ground.mode})</span><span>${money(x.ground.total)}</span></div>`:""}
+        ${busBackOf(x)?`<div class="row"><span class="muted">Return by bus (FlixBus${x.travelers>1?`, ${x.travelers} travelers`:""})</span><span>${money(busBackOf(x))}</span></div>`:""}
         ${others.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
         ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
         <div class="row t"><span>Total</span><span>~${money(tot)}</span></div>
@@ -499,8 +507,28 @@ function renderResults(){
       <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
       <div class="sub">Fares tagged <b>real price</b> are scraped live from the airline (Ryanair, Wizz Air, FlyOne); <b>cached est.</b> ones come from a cache and often read low — confirm on the booking page. Stays are live from Airbnb; airport transfer is an estimate.</div></div>`;
 
-  // flights first (the main thing)
-  html += `<div class="sect-title">Flights</div>` + d.results.map(flightCard).join("");
+  // flights first (the main thing), cheapest trip on top
+  const cards = [...d.results].sort((a,b)=>(a.error?Infinity:tripTotal(a))-(b.error?Infinity:tripTotal(b)));
+  html += `<div class="sect-title">Flights · cheapest first</div>` + cards.map(flightCard).join("");
+
+  // direct long-distance bus Chisinau <-> destination (toggleable; the short
+  // MD->RO airport-feeder rides above don't count as these)
+  if(d.bus){
+    html += `<label class="bagopt" style="margin-top:4px"><input type="checkbox" id="buschk" ${BUS_SHOW?"checked":""}>
+      <span>Show direct bus rides Chișinău ↔ ${d.label}</span></label>`;
+    if(BUS_SHOW){
+      const b=d.bus, line=(dir,q,ib)=>q?`<div class="leg"><div><div class="wh">${dir}</div>
+        <div class="det">FlixBus · dep ${(q.dep||"").slice(0,16).replace("T"," ")} · <a href="${q.book}" target="_blank">book</a> · <a href="${ib}" target="_blank">more carriers (infobus)</a></div></div>
+        <div class="price">${money(q.price)}<span class="muted" style="font-weight:400;font-size:12px"> /person</span></div></div>`
+        :`<div class="leg"><div class="wh">${dir}</div><div class="det"><a href="${ib}" target="_blank">check carriers on infobus</a></div></div>`;
+      html += `<div class="card pad" style="margin-bottom:16px">
+        <div class="fhead"><div><div class="ftitle">Direct bus · Chișinău ↔ ${d.label}</div>
+        <div class="fmeta">real FlixBus prices · long ride, but no flight needed</div></div></div>
+        ${line("Chișinău → "+d.label, b.out, b.infobus_out)}
+        ${line(d.label+" → Chișinău", b.back, b.infobus_back)}
+      </div>`;
+    }
+  }
 
   // stays (compact: 6 shown, filterable, tap to use)
   html += `<div class="sect-title">Places to stay${ sd?` · ${sd.nights} nights, matches the flight`:""}</div>`;
@@ -525,6 +553,7 @@ function renderResults(){
   $("results").querySelectorAll(".stay").forEach(el=>el.onclick=()=>{ SELSTAY=opts[+el.dataset.i]; renderResults(); });
   $("results").querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; STAY_ALL=false; renderResults(); });
   $("results").querySelectorAll(".bagchk").forEach(c=>c.onchange=()=>{ BAG_ON=c.checked; renderResults(); });
+  const bc=$("buschk"); if(bc) bc.onchange=()=>{ BUS_SHOW=bc.checked; renderResults(); };
   const sm=$("stayMore"); if(sm) sm.onclick=()=>{ STAY_ALL=true; renderResults(); };
 }
 

@@ -124,8 +124,21 @@ def do_search(body):
                      + timedelta(days=nights)).strftime("%Y-%m-%d")
         stay = ts.fetch_stay(hotel_loc, check_in, nights, c)
         stay_dates = {"check_in": check_in, "check_out": check_out, "nights": nights}
+
+    # direct long-distance bus Chisinau <-> destination (real FlixBus quotes),
+    # both a flight alternative and the return fix when no return flight exists
+    bus = None
+    if flying:
+        best = min(flying, key=lambda r: r["flight_total"])
+        nights = best["actual_nights"] or nmin
+        date_back = (datetime.strptime(best["out_date"], "%Y-%m-%d")
+                     + timedelta(days=nights)).strftime("%Y-%m-%d")
+        try:
+            bus = ts.sources.bus_home_options(hotel_loc, best["out_date"], date_back)
+        except Exception:
+            bus = None
     return {"label": label, "currency": c["currency"].upper(),
-            "results": results, "stay": stay, "stay_dates": stay_dates,
+            "results": results, "stay": stay, "stay_dates": stay_dates, "bus": bus,
             "have_key": ts.stays.have_key(c)}
 
 

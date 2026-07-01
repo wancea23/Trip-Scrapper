@@ -85,7 +85,7 @@ AIRLINE_BAG = {
     "FR": 42, "RK": 42,                             # Ryanair
     "U2": 45, "EC": 45, "DS": 45,                   # easyJet
     "VY": 45, "TO": 45, "EW": 45, "PC": 40,         # Vueling, Transavia, Eurowings, Pegasus
-    "5F": 45, "H9": 40,                             # FlyOne, HiSky (Moldovan carriers)
+    "5F": 45, "H4": 40, "U5": 45,                   # FlyOne, HiSky, SkyUp
 }
 DEFAULT_BAG_LEG = 40
 
@@ -93,7 +93,8 @@ DEFAULT_BAG_LEG = 40
 def airline_name(code):
     return {"W4": "Wizz Air", "W6": "Wizz Air", "W9": "Wizz Air", "FR": "Ryanair",
             "U2": "easyJet", "VY": "Vueling", "TO": "Transavia", "EW": "Eurowings",
-            "PC": "Pegasus", "5F": "FlyOne", "H9": "HiSky"}.get((code or "").upper(), code or "?")
+            "PC": "Pegasus", "5F": "FlyOne", "H4": "HiSky", "H9": "HiSky",
+            "U5": "SkyUp", "PQ": "SkyUp"}.get((code or "").upper(), code or "?")
 
 
 def airline_bag_leg(code):
@@ -341,7 +342,8 @@ def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6
     # FlyOne); a real fare beats a cached estimate for the same date, and between two
     # real fares the cheaper one wins
     for real_source in (sources.ryanair_leg_options, sources.wizz_leg_options,
-                        sources.flyone_leg_options):
+                        sources.flyone_leg_options, sources.hisky_leg_options,
+                        sources.skyup_leg_options):
         try:
             for leg in real_source(origin, dest, date_from, date_to, currency):
                 cur = by_date.get(leg["date"])
@@ -599,6 +601,23 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
                 + f") + stay {stay_total}\n{flights['booking_link']}"
             )
             send_telegram(cfg, msg)
+
+    # direct long-distance bus Chisinau <-> destination (skipped in quiet/compare mode)
+    if flight_rows and not quiet:
+        cheapest_f = min(flight_rows, key=lambda r: r[2]["flight_total"])[2]
+        bus_back_date = (datetime.strptime(cheapest_f["out"]["date"], "%Y-%m-%d")
+                         + timedelta(days=cheapest_f["actual_nights"] or nmin)).strftime("%Y-%m-%d")
+        try:
+            bus = sources.bus_home_options(hotel_loc, cheapest_f["out"]["date"], bus_back_date)
+        except Exception:
+            bus = None
+        if bus:
+            say(f"\n  Direct bus Chisinau <-> {label}:")
+            if bus["out"]:
+                say(f"    There : {bus['out']['price']} EUR FlixBus dep {bus['out']['dep']} - book {bus['out']['book']}")
+            if bus["back"]:
+                say(f"    Back  : {bus['back']['price']} EUR FlixBus dep {bus['back']['dep']} - book {bus['back']['book']}")
+            say(f"    More carriers/prices: {bus['infobus_out']}")
 
     if results:
         best = min(results, key=lambda r: r[3])
