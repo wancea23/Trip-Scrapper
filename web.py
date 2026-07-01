@@ -42,7 +42,7 @@ def cities_payload():
     out = [{"country": k, "cities": sorted(v, key=lambda x: x["city"])}
            for k, v in sorted(by_country.items())]
     return {"countries": out, "currency": CFG["currency"].upper(),
-            "origins": CFG.get("origins", ["IAS", "KIV"]),
+            "origins": CFG.get("origins", ["IAS", "RMO"]),
             "extras": CFG.get("extras", []),
             "defaults": {"depart_from": CFG["trip"]["depart_from"],
                          "depart_to": CFG["trip"]["depart_to"],
@@ -91,6 +91,7 @@ def _one(origin, dest_iata, c):
         "one_way": f["one_way"], "booking_link": f["booking_link"],
         "bag_total": f["bag_total"], "bag_airline": f["bag_airline"], "bag_legs": f["bag_legs"],
         "ground": _ground(origin, out["date"], f["travelers"], f["bag_legs"]),
+        "agency": f.get("agency"),
         # so the front end can derive the stay dates / display them
         "out_date": out["date"], "back_date": back["date"] if back else None,
     }

@@ -277,7 +277,7 @@ async function boot(){
   $("from").value=d.defaults.depart_from; $("to").value=d.defaults.depart_to;
   $("nmin").value=d.defaults.nights_min; $("nmax").value=d.defaults.nights_max;
   travelers=d.defaults.travelers||1; $("tval").textContent=travelers;
-  $("origins").innerHTML = ORIGINS.map((o,i)=>`<div class="chip ${i===0?'on':''}" data-o="${o}">${o}</div>`).join("");
+  $("origins").innerHTML = ORIGINS.map((o,i)=>`<div class="chip ${i<2?'on':''}" data-o="${o}">${o}</div>`).join("");
   $("origins").querySelectorAll(".chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
   $("triptype").querySelectorAll("button").forEach(b=>b.onclick=()=>{
     $("triptype").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); });
@@ -432,8 +432,8 @@ async function doSearch(){
 function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.options : (LAST&&LAST.stay?[LAST.stay]:[]); }
 
 /* ---------- results ---------- */
-function srcTag(l){ return l.source==="Ryanair"
-  ? '<span class="tag ok">Ryanair · real price</span>'
+function srcTag(l){ return l.source && l.source!=="cached"
+  ? `<span class="tag ok">${l.source} · real price</span>`
   : '<span class="tag">cached est.</span>'; }
 function legRow(where, l, extra){
   const pp = travelers>1 ? '<span class="muted" style="font-weight:400;font-size:12px"> /person</span>' : '';
@@ -470,6 +470,8 @@ function flightCard(x){
     ${bagToggle}
     ${x.ground?(()=>{ const tk=x.bag_legs*ttl; return `<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} by ${x.ground.mode}: <b>${money(x.ground.price)} × ${tk} ticket${tk>1?"s":""} = ${money(x.ground.total)}</b>
        <span class="muted" style="font-weight:400">· ${x.bag_legs>1?"there &amp; back":"one-way"}${ttl>1?`, ${ttl} travelers`:""}, ~${x.ground.hours}h each way · <a href="${x.ground.book}" target="_blank">exact price &amp; book</a></span></span></div>`; })():""}
+    ${x.agency?`<div class="bagopt" style="background:#f6f4fb;border-color:#ddd6ee"><span>Local agency: <b>zbor.md</b> sells ${x.agency.name} from <b>~${money(x.agency.price)}</b>
+       <span class="muted" style="font-weight:400">· "from" teaser, not date-specific · <a href="${x.agency.link}" target="_blank">check &amp; book on zbor.md</a></span></span></div>`:""}
     <div class="ftotal"><span class="lab">${noReturn?"Total (outbound only)":"Trip total"}</span><span class="amt">~${money(tot)}</span></div>
     <details class="incl"><summary>What's included</summary>
       <div class="break">
@@ -495,7 +497,7 @@ function renderResults(){
   if(cheapestTotal!=null)
     html += `<div class="total-card"><div class="lab">Cheapest trip, all-in${BAG_ON?" (incl. bag)":""}</div>
       <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
-      <div class="sub">Fares tagged <b>Ryanair · real price</b> are live; <b>cached est.</b> ones come from a cache and often read low — confirm on the booking page. Stays are live from Airbnb; airport transfer is an estimate.</div></div>`;
+      <div class="sub">Fares tagged <b>real price</b> are scraped live from the airline (Ryanair, Wizz Air, FlyOne); <b>cached est.</b> ones come from a cache and often read low — confirm on the booking page. Stays are live from Airbnb; airport transfer is an estimate.</div></div>`;
 
   // flights first (the main thing)
   html += `<div class="sect-title">Flights</div>` + d.results.map(flightCard).join("");

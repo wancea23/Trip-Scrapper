@@ -7,7 +7,7 @@
 
   "stay": { "adults": 1, "room_qty": 1 },
 
-  "origins": ["IAS", "OTP", "SCV", "BCM", "KIV"],
+  "origins": ["IAS", "RMO", "OTP", "SCV", "BCM"],
   "destination": "Prague",
 
   "trip": {

@@ -3,7 +3,7 @@ Trip-Scrapper  -  cheapest flight + place-to-stay finder.
 
 What it does
 ------------
-For each origin airport you list (default: IAS = Iasi, KIV = Chisinau) it finds the
+For each origin airport you list (default: IAS = Iasi, RMO = Chisinau) it finds the
 cheapest flight to your destination across a date range, adds your baggage estimate,
 then finds the cheapest place to stay for N nights, and reports the TOTAL trip cost
 (flights + stay). It stores every check in a small SQLite file so it can tell you when
@@ -69,8 +69,12 @@ DB_PATH = os.path.join(HERE, "trip_prices.db")
 FLIGHT_API = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
 HOTEL_API = "https://engine.hotellook.com/api/v2/cache.json"
 
-ORIGIN_NAMES = {"IAS": "Iasi", "KIV": "Chisinau", "OTP": "Bucharest",
+ORIGIN_NAMES = {"IAS": "Iasi", "RMO": "Chisinau", "KIV": "Chisinau", "OTP": "Bucharest",
                 "SCV": "Suceava", "BCM": "Bacau", "CLJ": "Cluj"}
+
+# Chisinau airport's IATA code changed KIV -> RMO in March 2024; the flight API only
+# knows RMO ("airport KIV: not flightable"). Accept the old code anywhere and translate.
+AIRPORT_ALIASES = {"KIV": "RMO"}
 
 # Estimated checked-bag (~20 kg) price per FLIGHT LEG, per person, in EUR, keyed by the
 # airline's IATA code. Aviasales only exposes the real bag price via a live in-browser
@@ -81,6 +85,7 @@ AIRLINE_BAG = {
     "FR": 42, "RK": 42,                             # Ryanair
     "U2": 45, "EC": 45, "DS": 45,                   # easyJet
     "VY": 45, "TO": 45, "EW": 45, "PC": 40,         # Vueling, Transavia, Eurowings, Pegasus
+    "5F": 45, "H9": 40,                             # FlyOne, HiSky (Moldovan carriers)
 }
 DEFAULT_BAG_LEG = 40
 
@@ -88,7 +93,7 @@ DEFAULT_BAG_LEG = 40
 def airline_name(code):
     return {"W4": "Wizz Air", "W6": "Wizz Air", "W9": "Wizz Air", "FR": "Ryanair",
             "U2": "easyJet", "VY": "Vueling", "TO": "Transavia", "EW": "Eurowings",
-            "PC": "Pegasus"}.get((code or "").upper(), code or "?")
+            "PC": "Pegasus", "5F": "FlyOne", "H9": "HiSky"}.get((code or "").upper(), code or "?")
 
 
 def airline_bag_leg(code):
@@ -306,6 +311,10 @@ def _leg_dict(f, origin, dest):
 def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6):
     """Cheapest legs origin->dest departing in [from, to], sorted by price, one (the
     cheapest) per date, up to `limit` - so the caller can show 2nd/3rd/... cheapest."""
+    origin = AIRPORT_ALIASES.get(origin, origin)
+    dest = AIRPORT_ALIASES.get(dest, dest)
+    origin = AIRPORT_ALIASES.get(origin, origin)
+    dest = AIRPORT_ALIASES.get(dest, dest)
     legs = []
     for month in months_in_range(date_from, date_to):
         params = {
@@ -328,14 +337,18 @@ def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6
     by_date = {}
     for leg in legs:                      # cheapest cached fare per date
         by_date.setdefault(leg["date"], leg)
-    # merge in Ryanair's REAL fares; a real fare beats a cached estimate for the same date
-    try:
-        for leg in sources.ryanair_leg_options(origin, dest, date_from, date_to, currency):
-            cur = by_date.get(leg["date"])
-            if cur is None or cur.get("source") == "cached" or leg["price"] < cur["price"]:
-                by_date[leg["date"]] = leg
-    except Exception:
-        pass
+    # merge in REAL fares scraped from the airlines' own sites (Ryanair, Wizz Air,
+    # FlyOne); a real fare beats a cached estimate for the same date, and between two
+    # real fares the cheaper one wins
+    for real_source in (sources.ryanair_leg_options, sources.wizz_leg_options,
+                        sources.flyone_leg_options):
+        try:
+            for leg in real_source(origin, dest, date_from, date_to, currency):
+                cur = by_date.get(leg["date"])
+                if cur is None or cur.get("source") == "cached" or leg["price"] < cur["price"]:
+                    by_date[leg["date"]] = leg
+        except Exception:
+            pass
     return sorted(by_date.values(), key=lambda l: l["price"])[:limit]
 
 
@@ -386,6 +399,13 @@ def fetch_flights(origin, dest, cfg):
                          - datetime.strptime(out["date"], "%Y-%m-%d")).days
     booking_link = aviasales_link(origin, dest, out["date"],
                                   back["date"] if back else None, travelers)
+    # flying from Chisinau: also show the local agency's (zbor.md) teaser price
+    agency = None
+    if AIRPORT_ALIASES.get(origin, origin) == "RMO":
+        try:
+            agency = sources.zbor_offer(dest)
+        except Exception:
+            agency = None
     return {
         "fare": fare,
         "baggage": baggage,
@@ -401,6 +421,7 @@ def fetch_flights(origin, dest, cfg):
         "bag_total": bag_total,
         "bag_airline": airline_name(out["airline"]),
         "bag_legs": legs,
+        "agency": agency,
     }
 
 
@@ -552,6 +573,9 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
             say(f"  Get to airport : +{ground_total} {cur} (Chisinau -> {g['to']} by {g['mode']}, ~{g['hours']}h est. - book {g['book']})")
         link_kind = "one-way" if flights["one_way"] else "round-trip (return included)"
         say(f"  Book {link_kind}: {flights['booking_link']}")
+        if flights.get("agency"):
+            ag = flights["agency"]
+            say(f"  Local agency : zbor.md sells {ag['name']} from ~{ag['price']} EUR - {ag['link']}")
         if stay:
             say(f"  Stay     : +{stay_total} {cur}")
         for it in extra_items:
@@ -641,7 +665,7 @@ def export_csv(path):
 def _demo_response(url, params):
     if url == FLIGHT_API:
         origin, dest = params["origin"], params["destination"]
-        base = {"IAS": 78, "KIV": 64}.get(origin, 70)
+        base = {"IAS": 78, "RMO": 64, "KIV": 64}.get(origin, 70)
         month = params["departure_at"]            # 'YYYY-MM'
         # spread fares across the month so both the outbound and the (narrow) return
         # window each catch a candidate - exercises the full round-trip path.

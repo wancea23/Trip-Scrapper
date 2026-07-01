@@ -64,13 +64,20 @@ Set `TRAVELPAYOUTS_TOKEN` as an environment variable on the host.
 ## How it works
 - Flights: Travelpayouts `prices_for_dates` (cached). The route/stops are decoded from the
   Aviasales link token; duration comes from the API.
+- Real fares scraped straight from the airlines (no keys) and merged over the cache:
+  **Ryanair** (cheapest-per-day API), **Wizz Air** (timetable API, prices converted
+  from the local currency), **FlyOne** (fare-calendar API, token scraped from their
+  homepage). **zbor.md** (local Moldovan agency) "from €X" teasers are shown per route
+  from Chișinău as a cross-check with a booking link.
 - Stays: Airbnb's public search page embeds all results as JSON — fetched with a normal
   request and parsed (no key, no headless browser).
 - `web.py` is a stdlib `http.server` (no web framework) that reuses `trip_scraper.py` +
-  `stays.py`.
+  `stays.py` + `sources.py`.
 
 ## Notes & limits
-- Chișinău (KIV) isn't in the flight dataset → Iași (IAS) is the real origin.
+- Chișinău's airport code changed **KIV → RMO** in 2024; the tool uses RMO (and quietly
+  translates KIV if you type it). Both Iași (IAS) and Chișinău (RMO) are searched.
+- HiSky has no public fare feed (ASP.NET booking engine) — no prices from them.
 - Airbnb scraping can be rate-limited / blocked from cloud IPs (works locally).
 - Free cached flight prices are indicative — confirm on the booking page.
 
