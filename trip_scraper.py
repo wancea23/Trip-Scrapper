@@ -309,9 +309,10 @@ def _leg_dict(f, origin, dest):
     }
 
 
-def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6):
+def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=10):
     """Cheapest legs origin->dest departing in [from, to], sorted by price, one (the
-    cheapest) per date, up to `limit` - so the caller can show 2nd/3rd/... cheapest."""
+    cheapest) per date + airport pair, up to `limit` - so the caller can show the
+    2nd/3rd/... cheapest and every airport of a metro area (FRA vs HHN)."""
     origin = AIRPORT_ALIASES.get(origin, origin)
     dest = AIRPORT_ALIASES.get(dest, dest)
     origin = AIRPORT_ALIASES.get(origin, origin)
@@ -335,12 +336,17 @@ def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6
             if date_from <= day <= date_to:
                 legs.append(_leg_dict(f, origin, dest))
     legs.sort(key=lambda leg: leg["price"])
-    by_date = {}
-    for leg in legs:                      # cheapest cached fare per date
-        by_date.setdefault(leg["date"], leg)
+    # one option per (date, actual airport pair) - a metro area's airports (FRA main
+    # vs HHN Hahn) are DIFFERENT airports and must not hide each other's flights
+    def slot(leg):
+        return (leg["date"], leg["route"][0], leg["route"][-1])
+
+    by_slot = {}
+    for leg in legs:                      # cheapest cached fare per slot
+        by_slot.setdefault(slot(leg), leg)
     # merge in REAL fares scraped from the airlines' own sites. Airline sites want the
     # exact airport (FlyOne = HHN not FRA), so metro codes are expanded per side.
-    # The CHEAPEST known fare wins each date (a pricier real fare must not hide a
+    # Within a slot the CHEAPEST known fare wins (a pricier real fare must not hide a
     # cheaper cached one); on a tie the real fare is preferred over the cached one.
     for real_source in (sources.ryanair_leg_options, sources.wizz_leg_options,
                         sources.flyone_leg_options, sources.hisky_leg_options,
@@ -349,13 +355,13 @@ def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6
             for d2 in sources.airports_for(dest):
                 try:
                     for leg in real_source(o2, d2, date_from, date_to, currency):
-                        cur = by_date.get(leg["date"])
+                        cur = by_slot.get(slot(leg))
                         if cur is None or leg["price"] < cur["price"] or (
                                 leg["price"] == cur["price"] and cur.get("source") == "cached"):
-                            by_date[leg["date"]] = leg
+                            by_slot[slot(leg)] = leg
                 except Exception:
                     pass
-    return sorted(by_date.values(), key=lambda l: l["price"])[:limit]
+    return sorted(by_slot.values(), key=lambda l: l["price"])[:limit]
 
 
 def fetch_cheapest_oneway(origin, dest, date_from, date_to, currency, token):

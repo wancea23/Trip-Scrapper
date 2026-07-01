@@ -83,10 +83,18 @@ def ryanair_leg_options(origin, dest, date_from, date_to, currency="EUR"):
 #  a metro/city code to the member airports low-costs actually use.
 # --------------------------------------------------------------------------- #
 METRO_AIRPORTS = {
-    "FRA": ["FRA", "HHN"], "PAR": ["CDG", "ORY", "BVA"], "LON": ["LHR", "LGW", "STN", "LTN"],
-    "MIL": ["MXP", "BGY", "LIN"], "ROM": ["FCO", "CIA"], "VEN": ["VCE", "TSF"],
-    "STO": ["ARN", "NYO"], "BUH": ["OTP", "BBU"], "BRU": ["BRU", "CRL"],
-    "OSL": ["OSL", "TRF"], "IST": ["IST", "SAW"],
+    # Europe
+    "FRA": ["FRA", "HHN"], "PAR": ["CDG", "ORY", "BVA"],
+    "LON": ["LHR", "LGW", "STN", "LTN", "LCY"], "MIL": ["MXP", "BGY", "LIN"],
+    "ROM": ["FCO", "CIA"], "VCE": ["VCE", "TSF"], "STO": ["ARN", "NYO", "BMA"],
+    "BUH": ["OTP", "BBU"], "BRU": ["BRU", "CRL"], "OSL": ["OSL", "TRF"],
+    "IST": ["IST", "SAW"],
+    # Americas
+    "NYC": ["JFK", "EWR", "LGA"], "CHI": ["ORD", "MDW"], "YTO": ["YYZ", "YTZ"],
+    "RIO": ["GIG", "SDU"], "SAO": ["GRU", "CGH", "VCP"], "BUE": ["EZE", "AEP"],
+    # Asia
+    "TYO": ["NRT", "HND"], "SEL": ["ICN", "GMP"], "BJS": ["PEK", "PKX"],
+    "SHA": ["PVG", "SHA"], "BKK": ["BKK", "DMK"],
 }
 
 
