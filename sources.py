@@ -78,6 +78,23 @@ def ryanair_leg_options(origin, dest, date_from, date_to, currency="EUR"):
 
 
 # --------------------------------------------------------------------------- #
+#  Metro codes: the cached API accepts city codes (FRA covers Hahn), but airline
+#  sites want the EXACT airport they fly to (FlyOne codes Frankfurt as HHN). Expand
+#  a metro/city code to the member airports low-costs actually use.
+# --------------------------------------------------------------------------- #
+METRO_AIRPORTS = {
+    "FRA": ["FRA", "HHN"], "PAR": ["CDG", "ORY", "BVA"], "LON": ["LHR", "LGW", "STN", "LTN"],
+    "MIL": ["MXP", "BGY", "LIN"], "ROM": ["FCO", "CIA"], "VEN": ["VCE", "TSF"],
+    "STO": ["ARN", "NYO"], "BUH": ["OTP", "BBU"], "BRU": ["BRU", "CRL"],
+    "OSL": ["OSL", "TRF"], "IST": ["IST", "SAW"],
+}
+
+
+def airports_for(code):
+    return METRO_AIRPORTS.get(code, [code])
+
+
+# --------------------------------------------------------------------------- #
 #  Currency: airline sites answer in their local currency (Wizz from RMO -> MDL)
 # --------------------------------------------------------------------------- #
 FX_FALLBACK = {"EUR": 1.0, "MDL": 20.1, "RON": 5.24, "HUF": 395.0, "PLN": 4.26,
@@ -259,6 +276,8 @@ def hisky_leg_options(origin, dest, date_from, date_to, currency="EUR"):
             html = r.text
         except requests.RequestException:
             break
+        if 'class="dayTab"' not in html:
+            break  # no calendar at all -> HiSky doesn't fly this route, stop probing
         for chunk in html.split('class="dayTab"')[1:]:
             md = re.search(r'data-newday="(\d{1,2}) (\w{3}) (\d{4})"', chunk[:200])
             mp = re.search(r'data-original-amount="€?([\d]+(?:[.,]\d{1,2})?)"', chunk[:900])

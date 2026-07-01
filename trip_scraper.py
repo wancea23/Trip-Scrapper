@@ -338,19 +338,23 @@ def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=6
     by_date = {}
     for leg in legs:                      # cheapest cached fare per date
         by_date.setdefault(leg["date"], leg)
-    # merge in REAL fares scraped from the airlines' own sites (Ryanair, Wizz Air,
-    # FlyOne); a real fare beats a cached estimate for the same date, and between two
-    # real fares the cheaper one wins
+    # merge in REAL fares scraped from the airlines' own sites. Airline sites want the
+    # exact airport (FlyOne = HHN not FRA), so metro codes are expanded per side.
+    # The CHEAPEST known fare wins each date (a pricier real fare must not hide a
+    # cheaper cached one); on a tie the real fare is preferred over the cached one.
     for real_source in (sources.ryanair_leg_options, sources.wizz_leg_options,
                         sources.flyone_leg_options, sources.hisky_leg_options,
                         sources.skyup_leg_options):
-        try:
-            for leg in real_source(origin, dest, date_from, date_to, currency):
-                cur = by_date.get(leg["date"])
-                if cur is None or cur.get("source") == "cached" or leg["price"] < cur["price"]:
-                    by_date[leg["date"]] = leg
-        except Exception:
-            pass
+        for o2 in sources.airports_for(origin):
+            for d2 in sources.airports_for(dest):
+                try:
+                    for leg in real_source(o2, d2, date_from, date_to, currency):
+                        cur = by_date.get(leg["date"])
+                        if cur is None or leg["price"] < cur["price"] or (
+                                leg["price"] == cur["price"] and cur.get("source") == "cached"):
+                            by_date[leg["date"]] = leg
+                except Exception:
+                    pass
     return sorted(by_date.values(), key=lambda l: l["price"])[:limit]
 
 
