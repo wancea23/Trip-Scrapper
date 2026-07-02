@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import trip_scraper as ts
+import bot as tgbot  # Telegram pairing + price hunts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(HERE, "index.html")
@@ -52,14 +53,28 @@ def cities_payload():
 
 
 def _cfg_for(body):
-    """Build a config dict from the base config overridden by the form values."""
+    """Build a config dict from the base config overridden by the form values.
+    Raises ValueError on bad input -> the handler answers 400 with the message."""
     c = json.loads(json.dumps(CFG))  # deep copy
     t = c["trip"]
     t["depart_from"] = body.get("depart_from") or t["depart_from"]
     t["depart_to"] = body.get("depart_to") or t["depart_to"]
-    t["nights_min"] = int(body.get("nights_min") or t.get("nights_min") or t.get("nights") or 3)
-    t["nights_max"] = max(t["nights_min"], int(body.get("nights_max") or t.get("nights_max") or t["nights_min"]))
-    t["travelers"] = int(body.get("travelers") or 1)
+    try:
+        a = datetime.strptime(t["depart_from"], "%Y-%m-%d")
+        b = datetime.strptime(t["depart_to"], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise ValueError("dates must look like 2026-08-01")
+    if a > b:
+        raise ValueError("the departure window starts after it ends - swap the dates")
+    try:
+        t["nights_min"] = int(body.get("nights_min") or t.get("nights_min") or t.get("nights") or 3)
+        t["nights_max"] = max(t["nights_min"], int(body.get("nights_max") or t.get("nights_max") or t["nights_min"]))
+        t["travelers"] = int(body.get("travelers") or 1)
+    except (TypeError, ValueError):
+        raise ValueError("nights and travelers must be whole numbers")
+    if t["nights_min"] < 1:
+        raise ValueError("nights must be at least 1")
+    t["travelers"] = max(1, t["travelers"])
     t["type"] = "oneway" if str(body.get("type", "")).lower() == "oneway" else "return"
     return c
 
@@ -72,13 +87,17 @@ def _ground(origin, out_date, travelers, legs):
     return {**g, "total": round(g["price"] * travelers * legs, 2), "legs": legs}
 
 
-def _one(origin, dest_iata, c):
-    """Run one origin -> destination flight lookup, return a JSON-friendly dict."""
+def _one(origin, dest_iata, c, include_real=True):
+    """Run one origin -> destination flight lookup, return a JSON-friendly dict.
+    Any failure comes back as a per-origin error entry - one origin's network
+    hiccup must not 500 the whole search."""
     oname = ts.ORIGIN_NAMES.get(origin, origin)
     try:
-        f = ts.fetch_flights(origin, dest_iata, c)
+        f = ts.fetch_flights(origin, dest_iata, c, include_real=include_real)
     except ts.RouteUnavailable as e:
         return {"origin": origin, "name": oname, "error": str(e)}
+    except Exception as e:
+        return {"origin": origin, "name": oname, "error": f"lookup failed: {e}"}
     if not f:
         return {"origin": origin, "name": oname, "error": "no flights found for these dates"}
     out, back = f["out"], f["back"]
@@ -86,7 +105,7 @@ def _one(origin, dest_iata, c):
         "origin": origin, "name": oname,
         "out": out, "back": back,
         "out_options": f["out_options"], "back_options": f["back_options"],
-        "baggage": f["baggage"], "flight_total": f["flight_total"],
+        "flight_total": f["flight_total"],
         "actual_nights": f["actual_nights"], "travelers": f["travelers"],
         "one_way": f["one_way"], "booking_link": f["booking_link"],
         "bag_total": f["bag_total"], "bag_airline": f["bag_airline"], "bag_legs": f["bag_legs"],
@@ -151,7 +170,9 @@ def do_compare(body):
         if name.startswith("_"):
             continue
         for origin in origins:
-            r = _one(origin, info["airport"], c)
+            # cached API only: ~129 cities x 5 airline scrapers would take forever
+            # and likely get the server's IP blocked
+            r = _one(origin, info["airport"], c, include_real=False)
             if "flight_total" in r:
                 rows.append({"total": r["flight_total"], "city": name,
                              "country": info["country"], "origin": origin,
@@ -180,6 +201,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, fh.read(), "text/html; charset=utf-8")
         elif self.path == "/api/cities":
             self._send(200, cities_payload())
+        elif self.path == "/api/tg/status":
+            self._send(200, tgbot.status(CFG))
+        elif self.path == "/api/tg/hunts":
+            self._send(200, tgbot.hunts_payload())
         else:
             self._send(404, {"error": "not found"})
 
@@ -191,8 +216,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, do_search(body))
             elif self.path == "/api/compare":
                 self._send(200, do_compare(body))
+            elif self.path == "/api/tg/code":
+                self._send(200, tgbot.make_code(CFG))
+            elif self.path == "/api/tg/hunt":
+                self._send(200, tgbot.add_hunts_ui(body.get("places", ""),
+                                                   body.get("price"), CFG))
+            elif self.path == "/api/tg/hunt_delete":
+                self._send(200, tgbot.remove_hunt_ui(body.get("id")))
             else:
                 self._send(404, {"error": "not found"})
+        except ValueError as e:  # bad input (dates, destination, malformed JSON)
+            self._send(400, {"error": str(e)})
         except Exception as e:  # never crash the server on a bad request
             self._send(500, {"error": str(e)})
 
@@ -206,6 +240,7 @@ def main():
     port = int(os.environ.get("PORT", PORT))
     host = "0.0.0.0" if cloud else "127.0.0.1"
     print(f"Trip Finder UI running on {host}:{port}")
+    tgbot.start_in_background(CFG)  # no-op until a bot token is configured
     if not cloud:
         threading.Timer(0.6, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
         print("Opening your browser... (press Ctrl+C here to stop)")

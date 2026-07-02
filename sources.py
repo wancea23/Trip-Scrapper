@@ -19,6 +19,8 @@ Extra price sources, all key-free:
 
 import re
 import sys
+import threading
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -108,21 +110,35 @@ def airports_for(code):
 FX_FALLBACK = {"EUR": 1.0, "MDL": 20.1, "RON": 5.24, "HUF": 395.0, "PLN": 4.26,
                "CZK": 24.6, "GBP": 0.86, "USD": 1.17, "CHF": 0.93}
 _FX = {}
+_FX_AT = 0.0        # when we last TRIED to fetch rates (success or failure)
+_FX_TTL = 6 * 3600  # refresh live rates every 6h; on failure don't retry before then
+_FX_LOCK = threading.Lock()
+# lazy one-time initialisers (Wizz version, FlyOne token, SkyUp session, zbor cache)
+# share this - the web server handles requests on multiple threads
+_INIT_LOCK = threading.Lock()
 
 
 def to_eur(amount, code):
-    """Convert `amount` in currency `code` to EUR (live ECB-ish rates, static fallback)."""
+    """Convert `amount` in currency `code` to EUR (live ECB-ish rates, static fallback).
+    One failed fetch must not cost every later conversion a 15s retry - remember the
+    attempt time and fall back to the static table until the TTL expires."""
+    global _FX_AT
     code = (code or "EUR").upper()
     if code == "EUR":
         return round(float(amount), 2)
-    if not _FX:
-        try:
-            r = requests.get("https://open.er-api.com/v6/latest/EUR",
-                             headers={"User-Agent": UA}, timeout=15)
-            _FX.update(r.json().get("rates") or {})
-        except (requests.RequestException, ValueError):
-            pass
-    rate = _FX.get(code) or FX_FALLBACK.get(code)
+    with _FX_LOCK:
+        if time.time() - _FX_AT > _FX_TTL:
+            _FX_AT = time.time()
+            try:
+                r = requests.get("https://open.er-api.com/v6/latest/EUR",
+                                 headers={"User-Agent": UA}, timeout=15)
+                rates = r.json().get("rates") or {}
+                if rates:
+                    _FX.clear()
+                    _FX.update(rates)
+            except (requests.RequestException, ValueError):
+                pass  # keep any previous rates; FX_FALLBACK covers the rest
+        rate = _FX.get(code) or FX_FALLBACK.get(code)
     return round(float(amount) / rate, 2) if rate else None
 
 
@@ -135,17 +151,18 @@ _WIZZ_VER = None
 def _wizz_version():
     """The API version is baked into wizzair.com's homepage (be.wizzair.com/X.Y.Z)."""
     global _WIZZ_VER
-    if _WIZZ_VER:
-        return _WIZZ_VER
-    try:
-        r = requests.get("https://www.wizzair.com/en-gb",
-                         headers={"User-Agent": UA}, timeout=20)
-        m = re.search(r"be\.wizzair\.com/(\d+\.\d+\.\d+)", r.text)
-        if m:
-            _WIZZ_VER = m.group(1)
-    except requests.RequestException:
-        pass
-    return _WIZZ_VER or "29.4.0"  # last seen 2026-07
+    with _INIT_LOCK:
+        if _WIZZ_VER:
+            return _WIZZ_VER
+        try:
+            r = requests.get("https://www.wizzair.com/en-gb",
+                             headers={"User-Agent": UA}, timeout=20)
+            m = re.search(r"be\.wizzair\.com/(\d+\.\d+\.\d+)", r.text)
+            if m:
+                _WIZZ_VER = m.group(1)
+        except requests.RequestException:
+            pass
+        return _WIZZ_VER or "29.4.0"  # last seen 2026-07
 
 
 def wizz_leg_options(origin, dest, date_from, date_to, currency="EUR"):
@@ -191,16 +208,17 @@ _FLYONE_TOKEN = None
 
 def _flyone_token():
     global _FLYONE_TOKEN
-    if _FLYONE_TOKEN:
+    with _INIT_LOCK:
+        if _FLYONE_TOKEN:
+            return _FLYONE_TOKEN
+        try:
+            r = requests.get("https://flyone.eu/en/", headers={"User-Agent": UA}, timeout=20)
+            m = re.search(r"CookieToken\('([^']+)'\)", r.text)
+            if m:
+                _FLYONE_TOKEN = m.group(1)
+        except requests.RequestException:
+            pass
         return _FLYONE_TOKEN
-    try:
-        r = requests.get("https://flyone.eu/en/", headers={"User-Agent": UA}, timeout=20)
-        m = re.search(r"CookieToken\('([^']+)'\)", r.text)
-        if m:
-            _FLYONE_TOKEN = m.group(1)
-    except requests.RequestException:
-        pass
-    return _FLYONE_TOKEN
 
 
 def flyone_leg_options(origin, dest, date_from, date_to, currency="EUR"):
@@ -294,7 +312,9 @@ def hisky_leg_options(origin, dest, date_from, date_to, currency="EUR"):
             try:
                 day = (f"{int(md.group(3))}-{_HISKY_MONTHS[md.group(2)]:02d}"
                        f"-{int(md.group(1)):02d}")
-                price = float(mp.group(1).replace(",", ""))
+                # the regex only allows ONE separator with 1-2 decimals, so a comma
+                # here is a DECIMAL comma ("89,99" = 89.99) - never a thousands sep
+                price = float(mp.group(1).replace(",", "."))
             except (KeyError, ValueError):
                 continue
             if not (date_from <= day <= date_to):
@@ -324,34 +344,38 @@ SKYUP_CONN = "https://skyup.aero/api/v2/site/airport-connections?language=en"
 
 def _skyup_session():
     global _SKYUP_SESSION
-    if _SKYUP_SESSION is None:
-        s = requests.Session()
-        s.headers.update({"User-Agent": UA, "Accept": "application/json",
-                          "Referer": "https://skyup.aero/en/booking/flights"})
-        try:
-            s.get("https://skyup.aero/en", timeout=20)  # seed cookies
-        except requests.RequestException:
-            pass
-        _SKYUP_SESSION = s
-    return _SKYUP_SESSION
+    with _INIT_LOCK:
+        if _SKYUP_SESSION is None:
+            s = requests.Session()
+            s.headers.update({"User-Agent": UA, "Accept": "application/json",
+                              "Referer": "https://skyup.aero/en/booking/flights"})
+            try:
+                s.get("https://skyup.aero/en", timeout=20)  # seed cookies
+            except requests.RequestException:
+                pass
+            _SKYUP_SESSION = s
+        return _SKYUP_SESSION
 
 
 def _skyup_routes():
     """Set of (origin, dest) SkyUp actually flies, so we skip pointless requests."""
     global _SKYUP_ROUTES
-    if _SKYUP_ROUTES is not None:
+    s = _skyup_session()
+    with _INIT_LOCK:
+        if _SKYUP_ROUTES is not None:
+            return _SKYUP_ROUTES
+        routes = set()
+        try:
+            r = s.get(SKYUP_CONN, timeout=20)
+            for c in (r.json().get("connections") or []):
+                o = (c.get("originAirport") or {}).get("airportCode")
+                d = (c.get("destinationAirport") or {}).get("airportCode")
+                if o and d:
+                    routes.add((o, d))
+        except (requests.RequestException, ValueError):
+            pass
+        _SKYUP_ROUTES = routes
         return _SKYUP_ROUTES
-    _SKYUP_ROUTES = set()
-    try:
-        r = _skyup_session().get(SKYUP_CONN, timeout=20)
-        for c in (r.json().get("connections") or []):
-            o = (c.get("originAirport") or {}).get("airportCode")
-            d = (c.get("destinationAirport") or {}).get("airportCode")
-            if o and d:
-                _SKYUP_ROUTES.add((o, d))
-    except (requests.RequestException, ValueError):
-        pass
-    return _SKYUP_ROUTES
 
 
 def skyup_leg_options(origin, dest, date_from, date_to, currency="EUR"):
@@ -417,23 +441,24 @@ def zbor_offers():
     """dest code -> {price (EUR, teaser), name, link} scraped from zbor.md's homepage
     RSC payload (entries look like \"sku\":\"RMO-MIL-RO\",...,\"price\":\"40\")."""
     global _ZBOR
-    if _ZBOR is not None:
+    with _INIT_LOCK:
+        if _ZBOR is not None:
+            return _ZBOR
+        _ZBOR = {}
+        try:
+            r = requests.get("https://www.zbor.md/", headers={"User-Agent": UA}, timeout=20)
+            html = r.text
+        except requests.RequestException:
+            return _ZBOR
+        pat = (r'\\"sku\\":\\"RMO-([A-Z]{3})-[A-Z]{2}\\",\\"name\\":\\"([^"\\]+)\\"'
+               r'[^}]*?\\"price\\":\\"(\d+(?:\.\d+)?)\\"')
+        for m in re.finditer(pat, html):
+            dest, name, price = m.group(1), m.group(2), float(m.group(3))
+            cur = _ZBOR.get(dest)
+            if cur is None or price < cur["price"]:
+                _ZBOR[dest] = {"price": round(price, 2), "name": name,
+                               "link": "https://www.zbor.md/"}
         return _ZBOR
-    _ZBOR = {}
-    try:
-        r = requests.get("https://www.zbor.md/", headers={"User-Agent": UA}, timeout=20)
-        html = r.text
-    except requests.RequestException:
-        return _ZBOR
-    pat = (r'\\"sku\\":\\"RMO-([A-Z]{3})-[A-Z]{2}\\",\\"name\\":\\"([^"\\]+)\\"'
-           r'[^}]*?\\"price\\":\\"(\d+(?:\.\d+)?)\\"')
-    for m in re.finditer(pat, html):
-        dest, name, price = m.group(1), m.group(2), float(m.group(3))
-        cur = _ZBOR.get(dest)
-        if cur is None or price < cur["price"]:
-            _ZBOR[dest] = {"price": round(price, 2), "name": name,
-                           "link": "https://www.zbor.md/"}
-    return _ZBOR
 
 
 def zbor_offer(dest_iata):
@@ -474,12 +499,15 @@ def flixbus_quote(from_city, to_city, date, currency="EUR"):
             f"&rideDate={dd}&adult=1")
     best = None
     for v in res.values():
-        p = (v.get("price") or {}).get("total")
+        try:  # the API sometimes returns the total as a string
+            p = float((v.get("price") or {}).get("total") or 0)
+        except (TypeError, ValueError):
+            continue
         # 0 = "fare needs seat selection" (some regional routes) - not a real price
-        if not p or float(p) <= 0:
+        if p <= 0:
             continue
         if best is None or p < best["price"]:
-            best = {"price": round(float(p), 2), "mode": "FlixBus",
+            best = {"price": round(p, 2), "mode": "FlixBus",
                     "dep": (v.get("departure") or {}).get("date"),
                     "arr": (v.get("arrival") or {}).get("date"),
                     "book": book}

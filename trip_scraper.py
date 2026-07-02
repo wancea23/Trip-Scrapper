@@ -137,21 +137,22 @@ def resolve_token(cfg):
 
 
 def validate_config(cfg):
-    """Catch the date/nights mistakes that would otherwise just return 'nothing found'."""
+    """Catch the date/nights mistakes that would otherwise just return 'nothing found'.
+    Raises ValueError (not SystemExit) so the web server can turn it into a 400."""
     t = cfg["trip"]
     try:
         a = datetime.strptime(t["depart_from"], "%Y-%m-%d")
         b = datetime.strptime(t["depart_to"], "%Y-%m-%d")
     except (KeyError, ValueError):
-        raise SystemExit("config.trip.depart_from / depart_to must be dates like 2026-08-01")
+        raise ValueError("config.trip.depart_from / depart_to must be dates like 2026-08-01")
     if a > b:
-        raise SystemExit("config.trip.depart_from is after depart_to - swap them")
+        raise ValueError("config.trip.depart_from is after depart_to - swap them")
     nmin, nmax = nights_bounds(t)
     if nmin < 1:
-        raise SystemExit("config.trip.nights_min must be at least 1")
+        raise ValueError("config.trip.nights_min must be at least 1")
     if nmax < nmin:
-        raise SystemExit("config.trip.nights_max must be >= nights_min")
-    if b < datetime.now() and not DEMO:
+        raise ValueError("config.trip.nights_max must be >= nights_min")
+    if b.date() < datetime.now().date() and not DEMO:
         print("  ! warning: your whole departure window is in the past - no fares will match")
 
 
@@ -173,7 +174,9 @@ def resolve_destination(name, cities):
         if c.get("country", "").lower() == name.lower():
             return c["airport"], c["hotel_location"], f"{city}, {c['country']} ({c['airport']})"
 
-    raise SystemExit(
+    # ValueError, NOT SystemExit: SystemExit doesn't inherit from Exception, so it
+    # would sail past the web server's error handler and kill the request thread.
+    raise ValueError(
         f"Don't know destination '{name}'. Add it to cities.json, or use a 3-letter "
         f"airport code (e.g. PRG). Run --list-cities to see what's available."
     )
@@ -309,12 +312,13 @@ def _leg_dict(f, origin, dest):
     }
 
 
-def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=10):
+def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=10,
+                      include_real=True):
     """Cheapest legs origin->dest departing in [from, to], sorted by price, one (the
     cheapest) per date + airport pair, up to `limit` - so the caller can show the
-    2nd/3rd/... cheapest and every airport of a metro area (FRA vs HHN)."""
-    origin = AIRPORT_ALIASES.get(origin, origin)
-    dest = AIRPORT_ALIASES.get(dest, dest)
+    2nd/3rd/... cheapest and every airport of a metro area (FRA vs HHN).
+    include_real=False skips the airline-site scrapers (compare mode checks ~129
+    cities - hammering 5 airline sites for each would be slow and get the IP banned)."""
     origin = AIRPORT_ALIASES.get(origin, origin)
     dest = AIRPORT_ALIASES.get(dest, dest)
     legs = []
@@ -348,19 +352,20 @@ def fetch_leg_options(origin, dest, date_from, date_to, currency, token, limit=1
     # exact airport (FlyOne = HHN not FRA), so metro codes are expanded per side.
     # Within a slot the CHEAPEST known fare wins (a pricier real fare must not hide a
     # cheaper cached one); on a tie the real fare is preferred over the cached one.
-    for real_source in (sources.ryanair_leg_options, sources.wizz_leg_options,
-                        sources.flyone_leg_options, sources.hisky_leg_options,
-                        sources.skyup_leg_options):
-        for o2 in sources.airports_for(origin):
-            for d2 in sources.airports_for(dest):
-                try:
-                    for leg in real_source(o2, d2, date_from, date_to, currency):
-                        cur = by_slot.get(slot(leg))
-                        if cur is None or leg["price"] < cur["price"] or (
-                                leg["price"] == cur["price"] and cur.get("source") == "cached"):
-                            by_slot[slot(leg)] = leg
-                except Exception:
-                    pass
+    if include_real:
+        for real_source in (sources.ryanair_leg_options, sources.wizz_leg_options,
+                            sources.flyone_leg_options, sources.hisky_leg_options,
+                            sources.skyup_leg_options):
+            for o2 in sources.airports_for(origin):
+                for d2 in sources.airports_for(dest):
+                    try:
+                        for leg in real_source(o2, d2, date_from, date_to, currency):
+                            cur = by_slot.get(slot(leg))
+                            if cur is None or leg["price"] < cur["price"] or (
+                                    leg["price"] == cur["price"] and cur.get("source") == "cached"):
+                                by_slot[slot(leg)] = leg
+                    except Exception:
+                        pass
     return sorted(by_slot.values(), key=lambda l: l["price"])[:limit]
 
 
@@ -369,7 +374,7 @@ def fetch_cheapest_oneway(origin, dest, date_from, date_to, currency, token):
     return opts[0] if opts else None
 
 
-def fetch_flights(origin, dest, cfg):
+def fetch_flights(origin, dest, cfg, include_real=True):
     """Cheapest outbound, plus a return leg unless this is a one-way trip.
 
     trip.type = "return" (default) searches a return leg between (chosen outbound + nights)
@@ -384,7 +389,8 @@ def fetch_flights(origin, dest, cfg):
     one_way = str(t.get("type", "return")).lower() == "oneway"
     nmin, nmax = nights_bounds(t)  # user's min/max trip length
 
-    out_options = fetch_leg_options(origin, dest, t["depart_from"], t["depart_to"], cur, token)
+    out_options = fetch_leg_options(origin, dest, t["depart_from"], t["depart_to"],
+                                    cur, token, include_real=include_real)
     if not out_options:
         return None
     out = out_options[0]
@@ -395,16 +401,22 @@ def fetch_flights(origin, dest, cfg):
         out_day = datetime.strptime(out["date"], "%Y-%m-%d")
         ret_from = (out_day + timedelta(days=nmin)).strftime("%Y-%m-%d")
         ret_to = (out_day + timedelta(days=nmax)).strftime("%Y-%m-%d")
-        back_options = fetch_leg_options(dest, origin, ret_from, ret_to, cur, token)
+        back_options = fetch_leg_options(dest, origin, ret_from, ret_to, cur, token,
+                                         include_real=include_real)
         back = back_options[0] if back_options else None
 
     fare_pp = out["price"] + (back["price"] if back else 0)
     fare = round(fare_pp * travelers, 2)
-    # checked-bag estimate from the outbound airline, per leg actually flown
+    # checked-bag estimate per leg, priced by THAT leg's airline (out on Wizz + back
+    # on Ryanair must not both be charged at the Wizz rate)
     legs = 2 if (not one_way and back) else 1
-    bag_per_person = airline_bag_leg(out["airline"]) * legs
+    bag_per_person = airline_bag_leg(out["airline"])
+    if not one_way and back:
+        bag_per_person += airline_bag_leg(back["airline"])
     bag_total = round(bag_per_person * travelers, 2)
-    baggage = round(cfg.get("baggage_fee_per_route", {}).get(origin, 0) * travelers, 2)
+    bag_names = [airline_name(out["airline"])]
+    if back and airline_name(back["airline"]) not in bag_names:
+        bag_names.append(airline_name(back["airline"]))
     actual_nights = None
     if back:
         actual_nights = (datetime.strptime(back["date"], "%Y-%m-%d")
@@ -420,8 +432,7 @@ def fetch_flights(origin, dest, cfg):
             agency = None
     return {
         "fare": fare,
-        "baggage": baggage,
-        "flight_total": round(fare + baggage, 2),
+        "flight_total": fare,
         "out": out,
         "back": back,
         "out_options": out_options,
@@ -431,7 +442,7 @@ def fetch_flights(origin, dest, cfg):
         "one_way": one_way,
         "booking_link": booking_link,
         "bag_total": bag_total,
-        "bag_airline": airline_name(out["airline"]),
+        "bag_airline": " + ".join(bag_names),
         "bag_legs": legs,
         "agency": agency,
     }
@@ -459,6 +470,13 @@ def db_init():
                 stay_name TEXT, stay_total REAL, nights INTEGER,
                 grand_total REAL )"""
     )
+    # last total we ALERTED about per route - so --watch doesn't re-ping Telegram
+    # every interval while the price just sits below the threshold
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS alerts (
+                origin TEXT, dest TEXT, total REAL,
+                PRIMARY KEY (origin, dest) )"""
+    )
     db.commit()
     return db
 
@@ -469,7 +487,7 @@ def db_save(db, dest, origin, flights, stay, nights, grand_total):
         (
             datetime.now().isoformat(timespec="seconds"),
             origin, dest,
-            flights["fare"], flights["baggage"], flights["flight_total"],
+            flights["fare"], flights["bag_total"], flights["flight_total"],
             flights["out"]["date"], (flights["back"] or {}).get("date"), flights["out"]["airline"],
             stay["name"] if stay else None, stay["stay_total"] if stay else None,
             nights,
@@ -484,6 +502,22 @@ def db_best(db, origin, dest):
         "SELECT MIN(grand_total) FROM checks WHERE origin=? AND dest=?", (origin, dest)
     ).fetchone()
     return row[0]
+
+
+def db_alerted(db, origin, dest):
+    row = db.execute(
+        "SELECT total FROM alerts WHERE origin=? AND dest=?", (origin, dest)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def db_mark_alerted(db, origin, dest, total):
+    db.execute(
+        "INSERT INTO alerts (origin, dest, total) VALUES (?,?,?) "
+        "ON CONFLICT(origin, dest) DO UPDATE SET total=excluded.total",
+        (origin, dest, total),
+    )
+    db.commit()
 
 
 # --------------------------------------------------------------------------- #
@@ -524,7 +558,9 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
     for origin in cfg["origins"]:
         oname = ORIGIN_NAMES.get(origin, origin)
         try:
-            flights = fetch_flights(origin, dest_iata, cfg)
+            # compare mode (quiet) sweeps ~129 cities - skip the airline-site
+            # scrapers there or the sweep takes forever and gets the IP banned
+            flights = fetch_flights(origin, dest_iata, cfg, include_real=not quiet)
         except RouteUnavailable as e:
             say(f"\n[{origin} {oname}]  not covered by the flight data API ({e})."
                 f"\n               -> try a nearby airport (e.g. IAS Iasi) or reach it by bus.")
@@ -550,15 +586,35 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
         else:
             say(f"Cheapest stay : none found for {check_in} -> {check_out} - tracking FLIGHTS only")
 
+    # direct long-distance bus Chisinau <-> destination: shown as an alternative, and
+    # priced INTO a card's total when that card has no return flight (ride home by bus)
+    bus = None
+    if flight_rows and not quiet:
+        cheapest_f = min(flight_rows, key=lambda r: r[2]["flight_total"])[2]
+        bus_back_date = (datetime.strptime(cheapest_f["out"]["date"], "%Y-%m-%d")
+                         + timedelta(days=cheapest_f["actual_nights"] or nmin)).strftime("%Y-%m-%d")
+        try:
+            bus = sources.bus_home_options(hotel_loc, cheapest_f["out"]["date"], bus_back_date)
+        except Exception:
+            bus = None
+
     # 3) print each origin's flights (with alternatives) and record
     results = []
     for origin, oname, flights in flight_rows:
         stay_total = stay["stay_total"] if stay else 0
-        extra_items, extra_total = compute_extras(cfg.get("extras", []), flights["travelers"], stay_nights)
+        # extras scale by THIS origin's actual trip length, not the cheapest origin's
+        extra_nights = flights["actual_nights"] or stay_nights
+        extra_items, extra_total = compute_extras(cfg.get("extras", []), flights["travelers"], extra_nights)
         bag_total = flights["bag_total"]
         g = sources.ground_to_airport(origin, flights["out"]["date"])
         ground_total = round(g["price"] * flights["travelers"] * flights["bag_legs"], 2) if g else 0
-        grand = round(flights["flight_total"] + bag_total + ground_total + stay_total + extra_total, 2)
+        # no return flight -> the FlixBus ride home is part of this trip's real cost
+        # (same rule the web UI applies, so both totals mean the same thing)
+        bus_back = 0
+        if not flights["one_way"] and not flights["back"] and bus and bus.get("back"):
+            bus_back = round(bus["back"]["price"] * flights["travelers"], 2)
+        grand = round(flights["flight_total"] + bag_total + ground_total + bus_back
+                      + stay_total + extra_total, 2)
         results.append((origin, oname, flights, grand))
 
         prev_best = db_best(db, origin, dest_iata)
@@ -579,6 +635,8 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
                 say(f"      or  : {fmt_leg(alt, cur)}")
         else:
             say(f"  Return   : none found (try one-way, or widen dates/nights_flex)")
+            if bus_back:
+                say(f"  Return by bus : +{bus_back} {cur} (FlixBus home, dep {bus['back']['dep']} - book {bus['back']['book']})")
         say(f"  FLIGHTS  : {flights['flight_total']} {cur} (cached estimate, baggage NOT included)")
         say(f"  Checked bag : +{bag_total} {cur} ({flights['bag_airline']} estimate, {flights['bag_legs']} leg(s) - exact price on booking page)")
         if g:
@@ -599,35 +657,31 @@ def run_once(cfg, cities, dest_override=None, quiet=False):
         else:
             say(line)
 
-        # alert: below threshold, or a fresh all-time low
+        # alert: below threshold, or a fresh all-time low - but only when the total
+        # actually DROPPED since the last alert (else --watch pings every interval)
         threshold = cfg.get("alert_threshold_total")
         is_new_low = prev_best is not None and grand < prev_best
         if (threshold and grand <= threshold) or is_new_low:
-            tag = "below your threshold" if (threshold and grand <= threshold) else "a new low"
-            msg = (
-                f"&#9992;&#65039; <b>{oname} -> {label}</b> total <b>{grand} {cur}</b> ({tag})\n"
-                f"Flights {flights['flight_total']} (out {out['date']}"
-                + (f", back {back['date']}" if back else "")
-                + f") + stay {stay_total}\n{flights['booking_link']}"
-            )
-            send_telegram(cfg, msg)
+            last_alerted = db_alerted(db, origin, dest_iata)
+            if last_alerted is None or grand < last_alerted:
+                tag = "below your threshold" if (threshold and grand <= threshold) else "a new low"
+                msg = (
+                    f"&#9992;&#65039; <b>{oname} -> {label}</b> total <b>{grand} {cur}</b> ({tag})\n"
+                    f"Flights {flights['flight_total']} (out {out['date']}"
+                    + (f", back {back['date']}" if back else "")
+                    + f") + stay {stay_total}\n{flights['booking_link']}"
+                )
+                send_telegram(cfg, msg)
+                db_mark_alerted(db, origin, dest_iata, grand)
 
-    # direct long-distance bus Chisinau <-> destination (skipped in quiet/compare mode)
-    if flight_rows and not quiet:
-        cheapest_f = min(flight_rows, key=lambda r: r[2]["flight_total"])[2]
-        bus_back_date = (datetime.strptime(cheapest_f["out"]["date"], "%Y-%m-%d")
-                         + timedelta(days=cheapest_f["actual_nights"] or nmin)).strftime("%Y-%m-%d")
-        try:
-            bus = sources.bus_home_options(hotel_loc, cheapest_f["out"]["date"], bus_back_date)
-        except Exception:
-            bus = None
-        if bus:
-            say(f"\n  Direct bus Chisinau <-> {label}:")
-            if bus["out"]:
-                say(f"    There : {bus['out']['price']} EUR FlixBus dep {bus['out']['dep']} - book {bus['out']['book']}")
-            if bus["back"]:
-                say(f"    Back  : {bus['back']['price']} EUR FlixBus dep {bus['back']['dep']} - book {bus['back']['book']}")
-            say(f"    More carriers/prices: {bus['infobus_out']}")
+    # direct long-distance bus Chisinau <-> destination (fetched before the loop)
+    if bus:
+        say(f"\n  Direct bus Chisinau <-> {label}:")
+        if bus["out"]:
+            say(f"    There : {bus['out']['price']} EUR FlixBus dep {bus['out']['dep']} - book {bus['out']['book']}")
+        if bus["back"]:
+            say(f"    Back  : {bus['back']['price']} EUR FlixBus dep {bus['back']['dep']} - book {bus['back']['book']}")
+        say(f"    More carriers/prices: {bus['infobus_out']}")
 
     if results:
         best = min(results, key=lambda r: r[3])
@@ -650,7 +704,7 @@ def run_compare(cfg, cities):
             continue
         try:
             res = run_once(cfg, cities, city, quiet=True)
-        except SystemExit:
+        except ValueError:
             continue
         for origin, oname, flights, grand in res:
             rows.append((grand, city, origin, oname))
@@ -751,8 +805,11 @@ def main():
         export_csv(args.export)
         return
 
-    if args.history:
-        show_history(cfg, cities)
+    if args.history:  # reads the local DB only - no token needed
+        try:
+            show_history(cfg, cities)
+        except ValueError as e:
+            sys.exit(str(e))
         return
 
     if not DEMO and resolve_token(cfg).startswith("PUT_YOUR"):
@@ -762,24 +819,31 @@ def main():
         print("   Tip: run  python trip_scraper.py --demo  to see the output with sample data.")
         sys.exit(1)
 
-    validate_config(cfg)
+    # library code raises ValueError (so the web server can 400 it); the CLI turns
+    # those into a clean exit with the message
+    try:
+        validate_config(cfg)
 
-    if args.compare:
-        run_compare(cfg, cities)
-        return
+        if args.compare:
+            run_compare(cfg, cities)
+            return
 
-    if args.watch:
-        every = cfg.get("check_interval_minutes", 180)
-        print(f"Watching every {every} min. Ctrl+C to stop.")
-        while True:
-            try:
-                run_once(cfg, cities, args.city)
-            except Exception as e:  # keep the watcher alive
-                print(f"  ! check failed: {e}")
-            print(f"\n...sleeping {every} min...")
-            time.sleep(every * 60)
-    else:
-        run_once(cfg, cities, args.city)
+        if args.watch:
+            # fail fast on a bad --city instead of erroring every interval forever
+            resolve_destination(args.city or cfg["destination"], cities)
+            every = cfg.get("check_interval_minutes", 180)
+            print(f"Watching every {every} min. Ctrl+C to stop.")
+            while True:
+                try:
+                    run_once(cfg, cities, args.city)
+                except Exception as e:  # keep the watcher alive
+                    print(f"  ! check failed: {e}")
+                print(f"\n...sleeping {every} min...")
+                time.sleep(every * 60)
+        else:
+            run_once(cfg, cities, args.city)
+    except ValueError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":
