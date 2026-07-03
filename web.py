@@ -235,7 +235,8 @@ def do_compare(body):
     extras_def = body.get("extras") or c.get("extras", [])
     include_bag = bool(body.get("include_bag"))  # bag is opt-in, like the UI checkbox
     with_stay = body.get("with_stay", True)
-    stay_cache = {}  # hotel_location -> stay dict; scrape live Airbnb once per city
+    stay_cache = {}   # hotel_location -> stay dict; scrape live Airbnb once per city
+    label_cache = {}  # city name -> display label (e.g. "Bucharest (OTP)")
     rows = []
     for name, info in cities.items():
         if name.startswith("_"):
@@ -260,9 +261,23 @@ def do_compare(body):
                 stay = stay_cache[loc]
             stay_total = stay["stay_total"] if stay else 0
             ground = r["ground"]["total"] if r.get("ground") else 0
-            extras_total = ts.compute_extras(extras_def, travelers, nights)[1]
+            items, extras_total = ts.compute_extras(extras_def, travelers, nights)
+            r["extras"], r["extras_total"] = items, extras_total  # for the drill-down detail
             grand = round(r["flight_total"] + (r["bag_total"] if include_bag else 0)
                           + ground + stay_total + extras_total, 2)
+            if name not in label_cache:
+                try:
+                    label_cache[name] = ts.resolve_destination(name, cities)[2]
+                except Exception:
+                    label_cache[name] = name
+            check_out = (datetime.strptime(r["out"]["date"], "%Y-%m-%d")
+                         + timedelta(days=nights)).strftime("%Y-%m-%d")
+            # the FULL page for this exact row (same origin/dates/fares/stay), so the
+            # UI dropdown renders it directly - no second search, numbers always match
+            detail = {"label": label_cache[name], "results": [r], "stay": stay,
+                      "stay_dates": {"check_in": r["out"]["date"],
+                                     "check_out": check_out, "nights": nights},
+                      "bus": None}
             rows.append({"total": grand, "flights": r["flight_total"],
                          "bag": r["bag_total"], "ground": ground,
                          "stay": stay_total, "stay_name": stay["name"] if stay else None,
@@ -270,7 +285,7 @@ def do_compare(body):
                          "country": info["country"], "origin": origin,
                          "name": r["name"], "out": r["out"]["date"],
                          "back": r["back"]["date"] if r["back"] else None,
-                         "nights": r["actual_nights"]})
+                         "nights": r["actual_nights"], "detail": detail})
     rows.sort(key=lambda x: x["total"])
     return {"currency": c["currency"].upper(), "rows": rows}
 

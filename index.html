@@ -819,13 +819,14 @@ function openCityTab(city){
 }
 
 /* ---------- compare ---------- */
-let CMP_OPEN=null;   // index of the currently expanded compare row (accordion)
+let CMP_OPEN=null, CMP_ROWS=[];   // index of the expanded compare row (accordion) + the rows w/ their detail
 async function doCompare(){
-  CITY_CACHE={}; CUR_TAB=null; CMP_OPEN=null;   // fresh drill-down state for this run
+  CMP_OPEN=null; CMP_ROWS=[];
   $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Comparing every destination — flights plus a live place-to-stay per city. This takes a few minutes.</div>`;
   const d = await (await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body({}))})).json();
   if(d.error){ $("results").innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
+  CMP_ROWS=d.rows;
   const brk=x=>{ const p=[`flights ${money(x.flights)}`];
      if(x.stay) p.push(`stay ${money(x.stay)}`);
      if(x.extras) p.push(`extras ${money(x.extras)}`);
@@ -850,19 +851,25 @@ async function doCompare(){
 
 function toggleCompareRow(i, city){
   const caretOf=k=>$("results").querySelector(`.cmp-sum[data-i="${k}"] .cmp-caret`);
-  if(CMP_OPEN!=null){                 // remember the open row's stay/filter state, then collapse it
-    if(CUR_TAB && CITY_CACHE[CUR_TAB]) Object.assign(CITY_CACHE[CUR_TAB], {selstay:SELSTAY, filter:STAYFILTER, all:STAY_ALL});
+  if(CMP_OPEN!=null){                 // collapse whichever row is open (accordion)
     const prev=$("cmprow-"+CMP_OPEN); if(prev) prev.style.display="none";
     const pc=caretOf(CMP_OPEN); if(pc) pc.innerHTML="&#9662;";
   }
-  if(CMP_OPEN===i){ CMP_OPEN=null; CUR_TAB=null; return; }   // tapping the open row closes it
+  if(CMP_OPEN===i){ CMP_OPEN=null; return; }   // tapping the open row closes it
   CMP_OPEN=i;
   const det=$("cmprow-"+i); if(det) det.style.display="table-row";
   const c=caretOf(i); if(c) c.innerHTML="&#9652;";
-  SEL=city; RES_TARGET="cmpd-"+i; CUR_TAB=city;
-  const cached=CITY_CACHE[city];
-  if(cached){ LAST=cached.d; SELSTAY=cached.selstay; STAYFILTER=cached.filter; STAY_ALL=cached.all; renderResults(); }
-  else doSearch();   // reuse the classic single-city page, rendered inside this row
+  // render the FULL page from the detail compare ALREADY found for this row -
+  // same origin/dates/fares/stay, so nothing is searched again and the numbers match
+  const row=CMP_ROWS[i];
+  SEL=city; RES_TARGET="cmpd-"+i;
+  if(row && row.detail){
+    LAST=row.detail; STAYFILTER="All"; STAY_ALL=false;
+    const opts=stayOptions(); SELSTAY=opts.length?opts[0]:null;
+    renderResults();
+  } else {
+    $("cmpd-"+i).innerHTML=`<div class="note">No detail available for this one.</div>`;
+  }
 }
 
 /* ---------- pick-to-hunt: select cities/countries on the site, bot notifies ---------- */
