@@ -161,10 +161,81 @@ def do_search(body):
             "have_key": ts.stays.have_key(c)}
 
 
+def do_multi(body):
+    """Compare only the places the user selected (cities and/or whole countries):
+    cheapest round-trip flights per city across the chosen origins, so the front
+    end can show the overall winner and the cheapest per country. Cached API only
+    (a selection can expand to many cities); the single-city search still gets
+    real scraped fares when the user drills in."""
+    cities = _cities()
+    c = _cfg_for(body)
+    origins = body.get("origins") or c["origins"]
+    targets, unknown = {}, []
+    for p in (body.get("places") or []):
+        kind, name = tgbot.resolve_place(str(p), cities)
+        if kind == "city":
+            targets[name] = cities[name]
+        elif kind == "country":
+            for ct, info in cities.items():
+                if not ct.startswith("_") and info.get("country") == name:
+                    targets[ct] = info
+        elif kind == "airport":
+            targets[name] = {"country": name, "airport": name, "hotel_location": name}
+        else:
+            unknown.append(p)
+    if not targets:
+        raise ValueError("select at least one known city or country")
+    travelers = c["trip"].get("travelers", 1)
+    nmin = ts.nights_bounds(c["trip"])[0]
+    extras_def = body.get("extras") or c.get("extras", [])
+    include_bag = bool(body.get("include_bag"))  # bag is opt-in, like the UI checkbox
+    rows = []
+    for name, info in targets.items():
+        best = None
+        for origin in origins:
+            r = _one(origin, info["airport"], c, include_real=False)
+            if "flight_total" in r and (best is None or r["flight_total"] < best["flight_total"]):
+                best = r
+        if not best:
+            rows.append({"total": None, "flights": None, "city": name,
+                         "country": info.get("country", "?")})
+            continue
+        # the WHOLE price, same math as the single-city page: flights + bag +
+        # ground + stay (live Airbnb, matched to this city's flight dates) + extras
+        nights = best["actual_nights"] or nmin
+        stay = None
+        if body.get("with_stay", True):
+            try:
+                stay = ts.fetch_stay(info.get("hotel_location", name), best["out_date"], nights, c)
+            except Exception:
+                stay = None
+        stay_total = stay["stay_total"] if stay else 0
+        ground = best["ground"]["total"] if best.get("ground") else 0
+        extras_total = ts.compute_extras(extras_def, travelers, nights)[1]
+        grand = round(best["flight_total"] + (best["bag_total"] if include_bag else 0)
+                      + ground + stay_total + extras_total, 2)
+        rows.append({"total": grand, "flights": best["flight_total"],
+                     "bag": best["bag_total"], "ground": ground,
+                     "stay": stay_total, "stay_name": stay["name"] if stay else None,
+                     "extras": extras_total, "city": name,
+                     "country": info.get("country", "?"), "origin": best["origin"],
+                     "name": best["name"], "out": best["out"]["date"],
+                     "back": best["back"]["date"] if best["back"] else None,
+                     "nights": best["actual_nights"], "link": best["booking_link"]})
+    rows.sort(key=lambda x: x["total"] if x["total"] is not None else float("inf"))
+    return {"currency": c["currency"].upper(), "rows": rows, "unknown": unknown}
+
+
 def do_compare(body):
     cities = _cities()
     c = _cfg_for(body)
     origins = body.get("origins") or c["origins"]
+    travelers = c["trip"].get("travelers", 1)
+    nmin = ts.nights_bounds(c["trip"])[0]
+    extras_def = body.get("extras") or c.get("extras", [])
+    include_bag = bool(body.get("include_bag"))  # bag is opt-in, like the UI checkbox
+    with_stay = body.get("with_stay", True)
+    stay_cache = {}  # hotel_location -> stay dict; scrape live Airbnb once per city
     rows = []
     for name, info in cities.items():
         if name.startswith("_"):
@@ -173,12 +244,33 @@ def do_compare(body):
             # cached API only: ~129 cities x 5 airline scrapers would take forever
             # and likely get the server's IP blocked
             r = _one(origin, info["airport"], c, include_real=False)
-            if "flight_total" in r:
-                rows.append({"total": r["flight_total"], "city": name,
-                             "country": info["country"], "origin": origin,
-                             "name": r["name"], "out": r["out"]["date"],
-                             "back": r["back"]["date"] if r["back"] else None,
-                             "nights": r["actual_nights"]})
+            if "flight_total" not in r:
+                continue
+            nights = r["actual_nights"] or nmin
+            # full trip = flights + (optional bag) + ground transport + stay + extras,
+            # the same math the single-city and multi-compare pages use
+            loc = info.get("hotel_location", name)
+            stay = None
+            if with_stay:
+                if loc not in stay_cache:
+                    try:
+                        stay_cache[loc] = ts.fetch_stay(loc, r["out"]["date"], nights, c)
+                    except Exception:
+                        stay_cache[loc] = None
+                stay = stay_cache[loc]
+            stay_total = stay["stay_total"] if stay else 0
+            ground = r["ground"]["total"] if r.get("ground") else 0
+            extras_total = ts.compute_extras(extras_def, travelers, nights)[1]
+            grand = round(r["flight_total"] + (r["bag_total"] if include_bag else 0)
+                          + ground + stay_total + extras_total, 2)
+            rows.append({"total": grand, "flights": r["flight_total"],
+                         "bag": r["bag_total"], "ground": ground,
+                         "stay": stay_total, "stay_name": stay["name"] if stay else None,
+                         "extras": extras_total, "city": name,
+                         "country": info["country"], "origin": origin,
+                         "name": r["name"], "out": r["out"]["date"],
+                         "back": r["back"]["date"] if r["back"] else None,
+                         "nights": r["actual_nights"]})
     rows.sort(key=lambda x: x["total"])
     return {"currency": c["currency"].upper(), "rows": rows}
 
@@ -192,6 +284,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")  # always serve the current UI
         self.end_headers()
         self.wfile.write(data)
 
@@ -216,11 +309,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, do_search(body))
             elif self.path == "/api/compare":
                 self._send(200, do_compare(body))
+            elif self.path == "/api/multi":
+                self._send(200, do_multi(body))
             elif self.path == "/api/tg/code":
                 self._send(200, tgbot.make_code(CFG))
             elif self.path == "/api/tg/hunt":
                 self._send(200, tgbot.add_hunts_ui(body.get("places", ""),
-                                                   body.get("price"), CFG))
+                                                   body.get("price"), CFG,
+                                                   body.get("metric", "total"),
+                                                   bool(body.get("include_bag"))))
             elif self.path == "/api/tg/hunt_delete":
                 self._send(200, tgbot.remove_hunt_ui(body.get("id")))
             else:

@@ -57,6 +57,8 @@
   input,select{font-family:inherit;font-size:15px;color:var(--ink);background:var(--card);
        border:1px solid var(--line);border-radius:11px;padding:11px 13px;width:100%}
   input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  /* metric pickers + hunt price inputs size to content, not the global width:100% */
+  #mMetric,#huntResMetric,#huntMetric,.mhP{width:auto}
   .field{display:flex;flex-direction:column;gap:7px}
   .field>label{font-size:13px;font-weight:600;color:var(--ink)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -211,6 +213,7 @@
   #huntbar{position:fixed;left:0;right:0;bottom:0;z-index:50;background:var(--ink);color:#fff;
        padding:12px 16px;display:none;box-shadow:0 -8px 24px rgba(16,24,40,.18)}
   #huntbar.on{display:block}
+  body.hb .wrap{padding-bottom:120px}  /* keep the nav clear of the fixed selection bar */
   .huntbar-in{max-width:760px;margin:0 auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   .hchip{background:rgba(255,255,255,.15);border-radius:999px;padding:5px 12px;font-size:13px;
        display:inline-flex;gap:7px;align-items:center}
@@ -239,7 +242,7 @@
   <!-- STEP 1 : destination -->
   <section class="step" data-s="1">
     <h2 class="q">Where do you want to go?</h2>
-    <p class="lead">Click a coloured country on the map to pick a city. Grey countries have no destinations yet — or just search below.</p>
+    <p class="lead">Click a coloured country on the map, then tap cities to select them — pick as many cities and whole countries as you like, then press <b>Next</b> in the bottom bar. Grey countries have no destinations yet.</p>
     <input id="filter" placeholder="Search a country or city">
     <div style="margin:10px 2px 2px"><a id="cmpLink" href="#">Not sure? Compare all destinations &rarr;</a></div>
     <div id="map"></div>
@@ -296,13 +299,9 @@
 
 <!-- pick-to-hunt basket bar -->
 <div id="huntbar"><div class="huntbar-in">
-  <span style="font-size:13px;opacity:.75">Price hunt:</span>
+  <span style="font-size:13px;opacity:.75">Selected:</span>
   <span id="huntChips"></span>
-  <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center;font-size:14px">
-    alert at &le; <input id="huntBarPrice" type="number" min="1" placeholder="250">
-    <span id="huntCur" style="opacity:.75;font-size:13px">EUR</span>
-    <button class="btn" id="huntBarGo" type="button">Notify me on Telegram</button>
-  </span>
+  <button class="btn" id="huntBarNext" type="button" style="padding:9px 16px;margin-left:auto">Next &rarr;</button>
 </div></div>
 <div id="toast"></div>
 
@@ -318,7 +317,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let CUR="EUR", COUNTRIES=[], ORIGINS=[], EXTRAS=[], SEL=null, STEP=1, MODE="plan";
-let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=true, STAY_ALL=false, BUS_SHOW=true;
+let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=false, STAY_ALL=false, BUS_SHOW=true;
 const STEPS=["Destination","Details","Extra costs","Your trip"];
 
 /* ---------- helpers ---------- */
@@ -341,7 +340,6 @@ function tripTotal(r){ const stay=SELSTAY?SELSTAY.stay_total:0;
 async function boot(){
   const d = await (await fetch("/api/cities")).json();
   CUR=d.currency; COUNTRIES=d.countries; ORIGINS=d.origins; EXTRAS=d.extras||[];
-  $("huntCur").textContent=CUR;
   $("from").value=d.defaults.depart_from; $("to").value=d.defaults.depart_to;
   $("nmin").value=d.defaults.nights_min; $("nmax").value=d.defaults.nights_max;
   travelers=d.defaults.travelers||1; $("tval").textContent=travelers;
@@ -371,27 +369,39 @@ function renderStepper(){
 }
 
 function goStep(n){
-  STEP=n; MODE = n===4 && MODE==="compare" ? "compare" : (n===4?"plan":MODE);
+  STEP=n; if(n===4 && MODE!=="compare" && MODE!=="multi") MODE="plan";
   document.querySelectorAll(".step").forEach(s=>s.classList.toggle("active", +s.dataset.s===n));
-  renderStepper(); renderNav();
-  if(n===2) $("d2sum").innerHTML = SEL ? `Going to <b>${SEL}</b>` : "";
+  renderStepper(); renderNav(); renderHuntBar();
+  if(n===2) $("d2sum").innerHTML = MODE==="multi" && HUNTSEL.length
+      ? `Comparing <b>${HUNTSEL.length} selected</b>: ${HUNTSEL.map(h=>esc(h.place)).join(", ")}`
+      : (SEL ? `Going to <b>${SEL}</b>` : "");
   window.scrollTo({top:0,behavior:"smooth"});
 }
 
 function renderNav(){
   const nav=$("nav");
-  if(STEP===1){ nav.innerHTML=""; return; }
+  if(STEP===1){
+    // same Next as the bottom bar, for people who scroll past the city list
+    nav.innerHTML = HUNTSEL.length
+      ? `<div class="spacer"></div><button class="btn" id="nextBtn">Next &rarr;</button>`
+      : "";
+    const nb=$("nextBtn"); if(nb) nb.onclick=proceedSelection;
+    return;
+  }
   if(STEP===4){
     nav.innerHTML = `<button class="btn ghost" onclick="goStep(1)">Start over</button>
        <div class="spacer"></div>${ MODE==="compare" ? "" : '<button class="btn ghost" onclick="goStep(3)">Edit</button>'}`;
     return;
   }
-  const next = STEP===3 ? "Find my trip" : "Continue";
+  const next = STEP===3 ? (MODE==="multi" ? "Compare my selection" : "Find my trip") : "Continue";
   nav.innerHTML = `<button class="btn ghost" onclick="goStep(${STEP-1})">Back</button>
      <div class="spacer"></div><button class="btn" id="nextBtn">${next} &rarr;</button>`;
   $("nextBtn").onclick = ()=>{
     if(STEP===2 && !originsSel().length){ alert("Pick at least one airport to fly from."); return; }
-    if(STEP===3){ MODE="plan"; goStep(4); doSearch(); } else goStep(STEP+1);
+    if(STEP===3){
+      if(MODE==="multi" && HUNTSEL.length){ goStep(4); doMulti(); }
+      else { MODE="plan"; goStep(4); doSearch(); }
+    } else goStep(STEP+1);
   };
 }
 
@@ -413,7 +423,14 @@ let MAP=null, CODE2COUNTRY={}, SELECTED_ISO=null;
 
 function citiesOf(country){ const c=COUNTRIES.find(x=>x.country===country); return c?c.cities:[]; }
 
-function pickCity(city){ SEL=city; MODE="plan"; goStep(2); }
+function proceedSelection(){
+  // Next from the selection: one city -> the normal single-trip flow;
+  // anything more (or a whole country) -> the multi-compare
+  if(!HUNTSEL.length) return;
+  if(HUNTSEL.length===1 && HUNTSEL[0].kind==="city"){ SEL=HUNTSEL[0].place; MODE="plan"; }
+  else MODE="multi";
+  goStep(2);
+}
 
 function highlight(iso){
   if(!MAP) return;
@@ -423,19 +440,19 @@ function highlight(iso){
 }
 
 function cityChip(ct){
-  return `<div class="chip ${SEL===ct.city?'on':''} ${huntHas(ct.city)?'hunt':''}" data-c="${ct.city}">${ct.city}<span class="code">${ct.airport}</span><span class="bell" data-p="${ct.city}" title="price-hunt ${ct.city}: get a Telegram ping when flights drop">${BELL}</span></div>`;
+  return `<div class="chip ${huntHas(ct.city)?'hunt':''}" data-c="${ct.city}" title="select ${ct.city}">${ct.city}<span class="code">${ct.airport}</span></div>`;
 }
 function bindChips(box){
-  box.querySelectorAll(".chip[data-c]").forEach(el=>el.onclick=()=>pickCity(el.dataset.c));
-  box.querySelectorAll(".bell").forEach(b=>b.onclick=e=>{ e.stopPropagation(); toggleHunt(b.dataset.p,"city"); });
+  // clicking a city SELECTS it (toggle) - never navigates; Next is in the bottom bar
+  box.querySelectorAll(".chip[data-c]").forEach(el=>el.onclick=()=>toggleHunt(el.dataset.c,"city"));
 }
 
 function showCity(country){
   highlight(COUNTRY_ISO[country]);
   const cities=citiesOf(country);
   const box=$("countryCities");
-  box.innerHTML=`<div class="cc-head">${country} <span class="muted" style="font-weight:400;font-size:13px">· choose a city</span>
-      <button class="huntall ${huntHas(country)?'on':''}" id="huntAllBtn" data-country="${country}" type="button">${BELL} ${huntHas(country)?"hunting whole country":"hunt whole country"}</button>
+  box.innerHTML=`<div class="cc-head">${country} <span class="muted" style="font-weight:400;font-size:13px">· tap cities to select</span>
+      <button class="huntall ${huntHas(country)?'on':''}" id="huntAllBtn" data-country="${country}" type="button">${huntHas(country)?"✓ whole country selected":"select whole country"}</button>
     </div><div class="chips">`+
     cities.map(cityChip).join("")+`</div>`;
   bindChips(box);
@@ -480,7 +497,7 @@ function onFilter(q){
     c.cities.forEach(ct=>{ if(c.country.toLowerCase().includes(q)||ct.city.toLowerCase().includes(q)) hits.push(ct); });
   });
   box.innerHTML=`<div class="cc-head">Matches
-      ${countryHits.slice(0,3).map(cn=>`<button class="huntall ${huntHas(cn)?'on':''}" data-country="${cn}" type="button">${BELL} ${huntHas(cn)?"hunting":"hunt"} all of ${cn}</button>`).join("")}
+      ${countryHits.slice(0,3).map(cn=>`<button class="huntall ${huntHas(cn)?'on':''}" data-country="${cn}" type="button">${huntHas(cn)?"✓ all of "+cn+" selected":"select all of "+cn}</button>`).join("")}
     </div><div class="chips">`+
     hits.slice(0,48).map(cityChip).join("")+`</div>`;
   bindChips(box);
@@ -501,17 +518,25 @@ function originsSel(){ return [...$("origins").querySelectorAll(".chip.on")].map
 function tripType(){ return $("triptype").querySelector("button.on").dataset.v; }
 function body(extra){
   return Object.assign({ type:tripType(), depart_from:$("from").value, depart_to:$("to").value,
-    nights_min:$("nmin").value, nights_max:$("nmax").value, travelers, origins:originsSel(), extras:EXTRAS }, extra);
+    nights_min:$("nmin").value, nights_max:$("nmax").value, travelers, origins:originsSel(),
+    extras:EXTRAS, include_bag:BAG_ON }, extra);
 }
 
+// where the classic results page renders: the main #results, or the per-city
+// panel under the multi-compare ranking (#cityResults)
+let RES_TARGET="results";
+function resEl(){ return $(RES_TARGET); }
+
 async function doSearch(){
-  $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Finding flights and places to stay in ${SEL}…</div>`;
+  if(MODE!=="multi") RES_TARGET="results";
+  resEl().innerHTML = `<div class="card pad"><span class="spin"></span>Finding flights and places to stay in ${SEL}…</div>`;
   const d = await (await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body({destination:SEL}))})).json();
-  if(d.error){ $("results").innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
+  if(d.error){ resEl().innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
   LAST=d; STAYFILTER="All"; STAY_ALL=false;
   const opts=stayOptions(); SELSTAY=opts.length?opts[0]:null;
   renderResults();
+  if(MODE==="multi") CITY_CACHE[SEL]={d, selstay:SELSTAY, filter:STAYFILTER, all:STAY_ALL};
 }
 
 function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.options : (LAST&&LAST.stay?[LAST.stay]:[]); }
@@ -580,6 +605,10 @@ function renderResults(){
   const d=LAST, opts=stayOptions(), sd=d.stay_dates;
   const flying=d.results.filter(r=>!r.error);
   const cheapestTotal = flying.length ? Math.min(...flying.map(tripTotal)) : null;
+  // in multi mode, feed the ACCURATE total (live fares, respecting the bag/stay
+  // choices) back up into the ranking + hunt prefills
+  if(MODE==="multi" && typeof window.onCityTotal==="function" && cheapestTotal!=null)
+    onCityTotal(SEL, cheapestTotal, Math.min(...flying.map(r=>r.flight_total)));
   let html = `<div class="summary">
       <b>${d.results[0]? (d.results.find(r=>!r.error)||d.results[0]).name : ""} → ${d.label}</b>
       ${sd?`· <span>${sd.check_in} – ${sd.check_out}</span> · <span>${sd.nights} nights</span>`:""}
@@ -589,15 +618,27 @@ function renderResults(){
       <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
       <div class="sub">Fares tagged <b>real price</b> are scraped live from the airline (Ryanair, Wizz Air, FlyOne); <b>cached est.</b> ones come from a cache and often read low — confirm on the booking page. Stays are live from Airbnb; airport transfer is an estimate.</div></div>`;
 
-  // hunt this trip: bot pings when round-trip flights drop below your number
+  // hunt this trip: bot pings when the chosen part (or the whole trip) drops
   const cheapFlight = flying.length ? Math.min(...flying.map(r=>r.flight_total)) : null;
   if(cheapFlight!=null && SEL){
+    const busNow = d.bus && (d.bus.out||d.bus.back)
+      ? Math.floor(((d.bus.out?d.bus.out.price:0)+(d.bus.back?d.bus.back.price:0))*travelers) : "";
+    const pre = { total: cheapestTotal!=null?Math.floor(cheapestTotal):"",
+                  flight: Math.floor(cheapFlight),
+                  bus: busNow,
+                  stay: SELSTAY?Math.floor(SELSTAY.stay_total):"" };
     html += `<div class="card pad" style="margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="color:var(--accent)">${BELL}</span>
-      <span style="flex:1;font-size:14px;min-width:200px"><b>Hunt this price.</b> Telegram pings you when round-trip flights to ${esc(SEL)} drop to</span>
+      <span style="font-size:14px"><b>Hunt this trip.</b> Telegram pings you when the</span>
+      <select id="huntResMetric" style="padding:8px 9px;border-radius:9px;font-size:13px">
+        <option value="total">full trip total</option><option value="flight">flights</option>
+        <option value="bus">bus</option><option value="stay">stay</option>
+      </select>
+      <span style="font-size:14px">for ${esc(SEL)} drops to</span>
       <span style="display:inline-flex;gap:8px;align-items:center;font-size:14px">&le;
-        <input id="huntResPrice" type="number" min="1" value="${Math.floor(cheapFlight)}" style="width:88px;padding:9px 10px"> ${CUR}
+        <input id="huntResPrice" type="number" min="1" value="${pre.total!==""?pre.total:pre.flight}" style="width:88px;padding:9px 10px"> ${CUR}
         <button class="btn" id="huntResGo" type="button">Notify me</button></span></div>`;
+    window._huntPre = pre;  // metric change re-prefills with that part's current price
   }
 
   // flights first (the main thing), cheapest trip on top
@@ -641,35 +682,157 @@ function renderResults(){
     html += `<div class="note">No place to stay found for these dates. Airbnb may be rate-limiting — try again shortly. Showing flights only.</div>`;
   }
 
-  $("results").innerHTML = html;
+  resEl().innerHTML = html;
 
-  $("results").querySelectorAll(".stay").forEach(el=>el.onclick=()=>{ SELSTAY=opts[+el.dataset.i]; renderResults(); });
-  $("results").querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; STAY_ALL=false; renderResults(); });
-  $("results").querySelectorAll(".bagchk").forEach(c=>c.onchange=()=>{ BAG_ON=c.checked; renderResults(); });
+  resEl().querySelectorAll(".stay").forEach(el=>el.onclick=()=>{ SELSTAY=opts[+el.dataset.i]; renderResults(); });
+  resEl().querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; STAY_ALL=false; renderResults(); });
+  resEl().querySelectorAll(".bagchk").forEach(c=>c.onchange=()=>{ BAG_ON=c.checked; renderResults(); });
   const bc=$("buschk"); if(bc) bc.onchange=()=>{ BUS_SHOW=bc.checked; renderResults(); };
   const sm=$("stayMore"); if(sm) sm.onclick=()=>{ STAY_ALL=true; renderResults(); };
   const hg=$("huntResGo"); if(hg) hg.onclick=()=>{
     const price=+$("huntResPrice").value;
     if(!price || price<=0){ toast("Set the alert price first", true); return; }
-    submitHunt(SEL, price);
+    submitHunt(SEL, price, $("huntResMetric").value);
   };
+  const hm=$("huntResMetric"); if(hm) hm.onchange=()=>{
+    const v=(window._huntPre||{})[hm.value];
+    if(v!=="" && v!=null) $("huntResPrice").value=v;
+  };
+}
+
+/* ---------- multi-compare: only the places YOU selected ---------- */
+function mhControls(place, val){
+  return `<span style="display:inline-flex;gap:6px;align-items:center;font-size:13px;white-space:nowrap" class="muted">&le;
+    <input type="number" min="1" class="mhP" data-place="${esc(place)}" value="${val!=null&&val!==""?Math.floor(val):""}" placeholder="price" style="width:82px;padding:6px 8px">
+    <button class="btn ghost mhGo" data-place="${esc(place)}" type="button" title="Telegram pings you when ${esc(place)} drops to your price" style="padding:7px 11px;font-size:13px">${BELL} hunt</button></span>`;
+}
+
+let CITY_CACHE={}, CUR_TAB=null;   // one live fetch per city per compare run
+
+async function doMulti(){
+  RES_TARGET="results";
+  CITY_CACHE={}; CUR_TAB=null;     // new compare (or edited dates) -> fresh fetches
+  $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Comparing your ${HUNTSEL.length} selection(s) — fetching flights and live Airbnb stays per city, this can take a minute…</div>`;
+  const d = await (await fetch("/api/multi",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body({places:HUNTSEL.map(h=>h.place)}))})).json();
+  if(d.error){ $("results").innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
+  const ok=d.rows.filter(r=>r.total!=null);
+  const groups=[];   // group by country, keeping the global cheapest-first order
+  d.rows.forEach(r=>{
+    let g=groups.find(x=>x.country===r.country);
+    if(!g){ g={country:r.country, rows:[]}; groups.push(g); }
+    g.rows.push(r);
+  });
+  let html=`<h2 class="q">Your selection, compared</h2>`;
+  if(ok.length){
+    const w=ok[0];
+    html+=`<div class="total-card"><div style="font-size:13px;opacity:.75">Cheapest of everything you selected · whole trip${BAG_ON?" (incl. bag)":" (no checked bag)"}</div>
+      <div style="font-size:24px;font-weight:700;margin-top:2px">${esc(w.city)}, ${esc(w.country)} — <span data-hero>${money(w.total)}</span></div>
+      <div style="font-size:13px;opacity:.78;margin-top:3px">flights ${money(w.flights)} from ${esc(w.name)}${w.stay?` · stay ${money(w.stay)}`:""} · full page below</div></div>`;
+  } else {
+    html+=`<div class="note">No flights found for any selected place in these dates — widen the window or pick other origins.</div>`;
+  }
+  if(d.unknown && d.unknown.length) html+=`<div class="note">Didn't recognise: ${d.unknown.map(esc).join(", ")}</div>`;
+  // slim ranking: whole-trip totals per country, hunt box on every line
+  html+=`<div class="card pad" style="margin-bottom:16px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:14px;margin-bottom:4px">
+      <span style="color:var(--accent)">${BELL}</span><b>Ranking + price hunts.</b> Telegram pings you when a place's
+      <select id="mMetric" style="padding:7px 9px;border-radius:9px;font-size:13px">
+        <option value="total">full trip total</option>
+        <option value="flight">flights only</option>
+        <option value="bus">bus only</option>
+        <option value="stay">stay only</option>
+      </select> drops to your price (prefilled with today's — set yours lower).</div>`;
+  groups.forEach(g=>{
+    const cheapest=g.rows.find(r=>r.total!=null);
+    html+=`<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
+      <b style="font-size:15px">${esc(g.country)}</b>
+      ${cheapest?`<span class="tag ok" data-ctag="${esc(g.country)}">cheapest: ${esc(cheapest.city)} ${money(cheapest.total)}</span>`:`<span class="tag">no flights</span>`}
+      <span style="margin-left:auto">${g.rows.length>1?mhControls(g.country, cheapest?cheapest.total:""):""}</span></div>`+
+    g.rows.map(r=>`<div class="huntrow" style="border-bottom:none;padding:5px 0 0 12px">
+      <span>${r.total==null?`<b>${esc(r.city)}</b> <span class="muted">no flights</span>`
+        :`<a href="#" class="drill" data-c="${esc(r.city)}"><b>${esc(r.city)}</b></a>${r===ok[0]?` <span class="tag ok">cheapest overall</span>`:""}
+          · <b data-rt="${esc(r.city)}">${money(r.total)}</b> <span class="muted">whole trip (flights ${money(r.flights)}${r.stay?`, stay ${money(r.stay)}`:""})</span>`}</span>
+      ${r.total!=null?mhControls(r.city, r.total):""}
+    </div>`).join("");
+  });
+  html+=`</div>`;
+  // THE OLD UI, per city: every airport's flights, all stays, buses - tabs to switch
+  if(ok.length){
+    html+=`<div class="sect-title">Full breakdown — the classic page per city: every airport, live fares, all stays, buses</div>
+      <div class="chips" id="cityTabs" style="margin-bottom:14px">`+
+      ok.map(r=>`<div class="chip" data-c="${esc(r.city)}">${esc(r.city)}<span class="code">${money(r.total)}</span></div>`).join("")+
+      `</div><div id="cityResults"></div>`;
+  }
+  $("results").innerHTML=html;
+  const ROWS=d.rows;
+  // a loaded city tab reports its accurate total (live fares + your checkbox
+  // choices) - update the ranking line, the hunt prefill, and the hero number
+  window.onCityTotal=(city,total,flights)=>{
+    const r=ROWS.find(x=>x.city===city); if(!r) return;
+    r.total=total; r.flights=flights;
+    const q=s=>$("results").querySelector(s.replace("CITY", city.replace(/"/g,'\\"')));
+    const b=q(`[data-rt="CITY"]`); if(b) b.textContent=money(total);
+    const inp=q(`.mhP[data-place="CITY"]`);
+    if(inp){ const v={total:total, flight:flights, stay:r.stay||"", bus:""}[$("mMetric").value];
+             if(v!=null&&v!=="") inp.value=Math.floor(v); }
+    if(ok.length && city===ok[0].city){ const h=$("results").querySelector("[data-hero]"); if(h) h.textContent=money(total); }
+    const best=ROWS.filter(x=>x.country===r.country && x.total!=null).sort((a,b)=>a.total-b.total)[0];
+    const ct=$("results").querySelector(`[data-ctag="${r.country.replace(/"/g,'\\"')}"]`);
+    if(ct && best) ct.textContent=`cheapest: ${best.city} ${money(best.total)}`;
+  };
+  $("mMetric").onchange=()=>{           // re-prefill every row with that part's current price
+    const met=$("mMetric").value;
+    $("results").querySelectorAll(".mhP").forEach(inp=>{
+      const r=ROWS.find(x=>x.city===inp.dataset.place);
+      const src=r||ok[0]; if(!src) return;
+      const v={total:src.total, flight:src.flights, stay:src.stay||"", bus:""}[met];
+      inp.value = (v!=null&&v!=="")?Math.floor(v):"";
+    });
+  };
+  $("results").querySelectorAll(".mhGo").forEach(b=>b.onclick=()=>{
+    const inp=$("results").querySelector(`.mhP[data-place="${b.dataset.place.replace(/"/g,'\\"')}"]`);
+    const price=+inp.value;
+    if(!price){ toast(`Type a max price for ${b.dataset.place} first`, true); inp.focus(); return; }
+    submitHunt(b.dataset.place, price, $("mMetric").value);
+  });
+  $("results").querySelectorAll(".drill").forEach(a=>a.onclick=e=>{ e.preventDefault(); openCityTab(a.dataset.c); });
+  if(ok.length) openCityTab(ok[0].city);   // auto-open the winner's full page
+}
+
+function openCityTab(city){
+  if(CUR_TAB && CITY_CACHE[CUR_TAB])   // keep the state of the tab we're leaving
+    Object.assign(CITY_CACHE[CUR_TAB], {selstay:SELSTAY, filter:STAYFILTER, all:STAY_ALL});
+  document.querySelectorAll("#cityTabs .chip").forEach(c=>c.classList.toggle("on", c.dataset.c===city));
+  document.querySelectorAll("#cityTabs .chip").forEach(c=>{ if(c.dataset.c===city) c.onclick=null; else c.onclick=()=>openCityTab(c.dataset.c); });
+  SEL=city; RES_TARGET="cityResults"; CUR_TAB=city;
+  const cached=CITY_CACHE[city];
+  if(cached){  // already found - render instantly, exactly as you left it
+    LAST=cached.d; SELSTAY=cached.selstay; STAYFILTER=cached.filter; STAY_ALL=cached.all;
+    renderResults(); return;
+  }
+  doSearch();   // the unchanged classic single-city page, rendered under the tabs
 }
 
 /* ---------- compare ---------- */
 async function doCompare(){
-  $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Comparing every destination… this takes about a minute.</div>`;
+  $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Comparing every destination — flights plus a live place-to-stay per city. This takes a few minutes.</div>`;
   const d = await (await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body({}))})).json();
   if(d.error){ $("results").innerHTML=`<div class="card pad" style="color:#b42318">Error: ${d.error}</div>`; return; }
+  const brk=x=>{ const p=[`flights ${money(x.flights)}`];
+     if(x.stay) p.push(`stay ${money(x.stay)}`);
+     if(x.extras) p.push(`extras ${money(x.extras)}`);
+     return p.join(" + "); };
   const rows=d.rows.map((x,i)=>`<tr><td class="muted">${i+1}</td>
      <td><b>${x.city}</b> <span class="muted">${x.country}</span></td>
      <td class="muted">${x.name}</td>
      <td class="muted">${x.out||""}${x.back?" → "+x.back:""}${x.nights!=null?" · "+x.nights+"n":""}</td>
-     <td class="pr">${money(x.total)}</td>
+     <td class="pr"><b>${money(x.total)}</b><div class="muted" style="font-weight:400;font-size:12px">${brk(x)}</div></td>
      <td><span class="bell" data-p="${x.city}" title="price-hunt ${x.city}">${BELL}</span></td></tr>`).join("");
   $("results").innerHTML = `<h2 class="q">Cheapest destinations</h2>
-     <p class="lead">Round-trip flights only, ranked. Cached estimates — confirm live. The bell adds a city to your Telegram price hunt.</p>
-     <div class="card pad"><table><thead><tr><th>#</th><th>Destination</th><th>From</th><th>Dates</th><th style="text-align:right">Flights</th><th></th></tr></thead>
+     <p class="lead">Full trip price — round-trip flights + a live place-to-stay + extras — ranked cheapest first. Cached flight estimates; confirm live. The bell adds a city to your Telegram price hunt.</p>
+     <div class="card pad"><table><thead><tr><th>#</th><th>Destination</th><th>From</th><th>Dates</th><th style="text-align:right">Trip total</th><th></th></tr></thead>
      <tbody>${rows||`<tr><td colspan="6" class="muted">No results.</td></tr>`}</tbody></table></div>`;
   $("results").querySelectorAll(".bell[data-p]").forEach(b=>b.onclick=()=>toggleHunt(b.dataset.p,"city"));
 }
@@ -684,8 +847,14 @@ function toggleHunt(place, kind){
   else HUNTSEL.push({place, kind});
   renderHuntBar();
 }
+const METRIC_LABELS={total:"full trip", flight:"flights", bus:"bus", stay:"stay"};
 function renderHuntBar(){
-  $("huntbar").classList.toggle("on", HUNTSEL.length>0);
+  const show = HUNTSEL.length>0 && STEP===1;   // the selection bar lives on step 1 ONLY
+  $("huntbar").classList.toggle("on", show);
+  document.body.classList.toggle("hb", show);  // pad the page bottom
+  $("huntBarNext").innerHTML = (HUNTSEL.length===1 && HUNTSEL[0].kind==="city")
+      ? "Next &rarr;" : `Next — compare ${HUNTSEL.length} &rarr;`;
+  if(STEP===1) renderNav();   // the step-1 "compare selected" button tracks the basket
   $("huntChips").innerHTML = HUNTSEL.map(h=>`<span class="hchip"><b>${esc(h.place)}</b>${h.kind==="country"?'<span style="opacity:.65">country</span>':""}<span class="rm" data-p="${esc(h.place)}">&times;</span></span>`).join(" ");
   $("huntChips").querySelectorAll(".rm").forEach(x=>x.onclick=()=>toggleHunt(x.dataset.p));
   document.querySelectorAll("#countryCities .chip[data-c]").forEach(c=>c.classList.toggle("hunt", huntHas(c.dataset.c)));
@@ -697,9 +866,10 @@ function toast(m, err){
   t.style.display="block"; clearTimeout(TOAST_T); TOAST_T=setTimeout(()=>t.style.display="none", 4500);
 }
 
-async function submitHunt(places, price){
+async function submitHunt(places, price, metric){
   /* pairing-aware: not set up -> open the setup guide; not paired -> open pairing
      and auto-submit this hunt as soon as the code is redeemed */
+  metric = metric || "total";
   const st = await (await fetch("/api/tg/status")).json();
   if(!st.configured){
     $("tgOverlay").classList.add("open"); tgRender();
@@ -707,28 +877,22 @@ async function submitHunt(places, price){
     return false;
   }
   if(!st.users || !st.users.length){
-    TG_AFTER_PAIR={places, price};
+    TG_AFTER_PAIR={places, price, metric};
     $("tgOverlay").classList.add("open"); tgRender();
     toast("Link Telegram with the code — your hunt starts right after");
     return false;
   }
   const r = await fetch("/api/tg/hunt",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({places, price})});
+    body:JSON.stringify({places, price, metric, include_bag:BAG_ON})});
   const j = await r.json();
   if(j.error){ toast("Error: "+j.error, true); return false; }
-  let m = `Hunting ${j.added.join(", ")} at ≤${price} ${CUR} — Telegram pings you when flights drop`;
+  let m = `Hunting ${j.added.join(", ")} — ${METRIC_LABELS[metric]||metric} at ≤${price} ${CUR}, Telegram pings you on a drop`;
   if(j.errors && j.errors.length) m += ` (skipped: ${j.errors.join("; ")})`;
   toast(m);
   return true;
 }
 
-$("huntBarGo").onclick=async()=>{
-  const price=+$("huntBarPrice").value;
-  if(!price || price<=0){ toast("Set the alert price first (max total for round-trip flights)", true); $("huntBarPrice").focus(); return; }
-  if(await submitHunt(HUNTSEL.map(h=>h.place).join(", "), price)){
-    HUNTSEL=[]; $("huntBarPrice").value=""; renderHuntBar();
-  }
-};
+$("huntBarNext").onclick=proceedSelection;
 
 /* ---------- telegram price hunts ---------- */
 let TG_POLL=null, TG_CODE=null;
@@ -755,17 +919,23 @@ async function tgRender(){
   clearInterval(TG_POLL); TG_POLL=null;
   const d = await (await fetch("/api/tg/hunts")).json();
   const rows = d.hunts.map(h=>`<div class="huntrow">
-      <span><b>${esc(h.place)}</b> <span class="muted">${h.kind}</span> · ≤${h.max_price} ${h.currency}
+      <span><b>${esc(h.place)}</b> <span class="muted">${h.kind} · ${METRIC_LABELS[h.metric]||h.metric||"full trip"}</span> · ≤${h.max_price} ${h.currency}
         ${h.last_price!=null?`<span class="muted">· last ${h.last_price} ${h.currency}</span>`:""}</span>
       <button class="del" data-id="${h.id}" title="stop this hunt">&times;</button></div>`).join("");
   $("tgBody").innerHTML = `
     <p>Connected: <b>${st.users.map(u=>esc(u.name)).join(", ")}</b> · bot <b>@${esc(st.username)}</b></p>
-    <p style="margin:10px 0 2px"><b>New hunt</b> — a city, a whole country, or several separated by commas, each alerting at your max price (round-trip flights):</p>
+    <p style="margin:10px 0 2px"><b>New hunt</b> — a city, a whole country, or several separated by commas. Pick what to watch: the full trip total or just one part.</p>
     <div class="huntform">
       <input id="huntPlaces" placeholder="Prague, Italy, Japan">
       <input id="huntPrice" type="number" min="1" placeholder="max ${CUR}">
       <button class="btn" id="huntAdd" type="button">Hunt</button>
     </div>
+    <select id="huntMetric" style="padding:8px 9px;border-radius:9px;font-size:13px;margin-bottom:4px">
+      <option value="total">watch the full trip total (flights + stay + extras)</option>
+      <option value="flight">watch flights only</option>
+      <option value="bus">watch the bus only</option>
+      <option value="stay">watch the stay only</option>
+    </select>
     <div id="huntMsg" class="muted" style="font-size:13px"></div>
     <div style="margin-top:10px">${rows || '<span class="muted">No hunts yet.</span>'}</div>
     <p class="muted" style="font-size:13px;margin-top:12px">Also from Telegram:
@@ -773,7 +943,8 @@ async function tgRender(){
     <p class="muted" style="font-size:13px">Need to pair another phone? <a href="#" id="tgRepair">get a new code</a></p>`;
   $("huntAdd").onclick=async()=>{
     const r = await fetch("/api/tg/hunt",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({places:$("huntPlaces").value, price:$("huntPrice").value})});
+      body:JSON.stringify({places:$("huntPlaces").value, price:$("huntPrice").value,
+                           metric:$("huntMetric").value})});
     const j = await r.json();
     if(j.error){ $("huntMsg").textContent="Error: "+j.error; return; }
     if(j.errors && j.errors.length){ $("huntMsg").textContent="Skipped: "+j.errors.join("; "); setTimeout(tgRender,1200); }
@@ -812,7 +983,7 @@ async function tgPairing(st, force){
       clearInterval(TG_POLL); TG_POLL=null; TG_CODE=null;
       if(TG_AFTER_PAIR){    // a hunt was waiting on this pairing - fire it now
         const p=TG_AFTER_PAIR; TG_AFTER_PAIR=null;
-        if(await submitHunt(p.places, p.price)){ HUNTSEL=[]; $("huntBarPrice").value=""; renderHuntBar(); tgHide(); return; }
+        if(await submitHunt(p.places, p.price, p.metric)){ tgHide(); return; }
       }
       tgRender();
     }
