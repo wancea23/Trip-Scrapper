@@ -354,7 +354,7 @@ let travelers=1;
 $("tup").onclick=()=>{ travelers++; $("tval").textContent=travelers; };
 $("tdn").onclick=()=>{ if(travelers>1){ travelers--; $("tval").textContent=travelers; } };
 $("filter").addEventListener("input",e=>onFilter(e.target.value));
-$("cmpLink").onclick=e=>{ e.preventDefault(); MODE="compare"; goStep(4); doCompare(); };
+$("cmpLink").onclick=e=>{ e.preventDefault(); MODE="compare"; SEL=null; HUNTSEL=[]; renderHuntBar(); goStep(2); };
 
 /* ---------- stepper ---------- */
 function renderStepper(){
@@ -372,9 +372,11 @@ function goStep(n){
   STEP=n; if(n===4 && MODE!=="compare" && MODE!=="multi") MODE="plan";
   document.querySelectorAll(".step").forEach(s=>s.classList.toggle("active", +s.dataset.s===n));
   renderStepper(); renderNav(); renderHuntBar();
-  if(n===2) $("d2sum").innerHTML = MODE==="multi" && HUNTSEL.length
-      ? `Comparing <b>${HUNTSEL.length} selected</b>: ${HUNTSEL.map(h=>esc(h.place)).join(", ")}`
-      : (SEL ? `Going to <b>${SEL}</b>` : "");
+  if(n===2) $("d2sum").innerHTML = MODE==="compare"
+      ? "Comparing <b>every destination</b> — set your dates and travelers, then rank all of them"
+      : (MODE==="multi" && HUNTSEL.length
+        ? `Comparing <b>${HUNTSEL.length} selected</b>: ${HUNTSEL.map(h=>esc(h.place)).join(", ")}`
+        : (SEL ? `Going to <b>${SEL}</b>` : ""));
   window.scrollTo({top:0,behavior:"smooth"});
 }
 
@@ -390,16 +392,18 @@ function renderNav(){
   }
   if(STEP===4){
     nav.innerHTML = `<button class="btn ghost" onclick="goStep(1)">Start over</button>
-       <div class="spacer"></div>${ MODE==="compare" ? "" : '<button class="btn ghost" onclick="goStep(3)">Edit</button>'}`;
+       <div class="spacer"></div><button class="btn ghost" onclick="goStep(3)">Edit dates</button>`;
     return;
   }
-  const next = STEP===3 ? (MODE==="multi" ? "Compare my selection" : "Find my trip") : "Continue";
+  const next = STEP===3 ? (MODE==="compare" ? "Compare all destinations"
+      : (MODE==="multi" ? "Compare my selection" : "Find my trip")) : "Continue";
   nav.innerHTML = `<button class="btn ghost" onclick="goStep(${STEP-1})">Back</button>
      <div class="spacer"></div><button class="btn" id="nextBtn">${next} &rarr;</button>`;
   $("nextBtn").onclick = ()=>{
     if(STEP===2 && !originsSel().length){ alert("Pick at least one airport to fly from."); return; }
     if(STEP===3){
-      if(MODE==="multi" && HUNTSEL.length){ goStep(4); doMulti(); }
+      if(MODE==="compare"){ goStep(4); doCompare(); }
+      else if(MODE==="multi" && HUNTSEL.length){ goStep(4); doMulti(); }
       else { MODE="plan"; goStep(4); doSearch(); }
     } else goStep(STEP+1);
   };
@@ -528,7 +532,7 @@ let RES_TARGET="results";
 function resEl(){ return $(RES_TARGET); }
 
 async function doSearch(){
-  if(MODE!=="multi") RES_TARGET="results";
+  if(MODE==="plan") RES_TARGET="results";  // multi/compare drill-downs set their own target first
   resEl().innerHTML = `<div class="card pad"><span class="spin"></span>Finding flights and places to stay in ${SEL}…</div>`;
   const d = await (await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body({destination:SEL}))})).json();
@@ -536,7 +540,7 @@ async function doSearch(){
   LAST=d; STAYFILTER="All"; STAY_ALL=false;
   const opts=stayOptions(); SELSTAY=opts.length?opts[0]:null;
   renderResults();
-  if(MODE==="multi") CITY_CACHE[SEL]={d, selstay:SELSTAY, filter:STAYFILTER, all:STAY_ALL};
+  if(MODE==="multi"||MODE==="compare") CITY_CACHE[SEL]={d, selstay:SELSTAY, filter:STAYFILTER, all:STAY_ALL};
 }
 
 function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.options : (LAST&&LAST.stay?[LAST.stay]:[]); }
@@ -815,7 +819,9 @@ function openCityTab(city){
 }
 
 /* ---------- compare ---------- */
+let CMP_OPEN=null;   // index of the currently expanded compare row (accordion)
 async function doCompare(){
+  CITY_CACHE={}; CUR_TAB=null; CMP_OPEN=null;   // fresh drill-down state for this run
   $("results").innerHTML = `<div class="card pad"><span class="spin"></span>Comparing every destination — flights plus a live place-to-stay per city. This takes a few minutes.</div>`;
   const d = await (await fetch("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body({}))})).json();
@@ -824,17 +830,39 @@ async function doCompare(){
      if(x.stay) p.push(`stay ${money(x.stay)}`);
      if(x.extras) p.push(`extras ${money(x.extras)}`);
      return p.join(" + "); };
-  const rows=d.rows.map((x,i)=>`<tr><td class="muted">${i+1}</td>
-     <td><b>${x.city}</b> <span class="muted">${x.country}</span></td>
-     <td class="muted">${x.name}</td>
-     <td class="muted">${x.out||""}${x.back?" → "+x.back:""}${x.nights!=null?" · "+x.nights+"n":""}</td>
-     <td class="pr"><b>${money(x.total)}</b><div class="muted" style="font-weight:400;font-size:12px">${brk(x)}</div></td>
-     <td><span class="bell" data-p="${x.city}" title="price-hunt ${x.city}">${BELL}</span></td></tr>`).join("");
+  const rows=d.rows.map((x,i)=>`<tr class="cmp-sum" data-i="${i}" data-city="${esc(x.city)}" style="cursor:pointer">
+       <td class="muted"><span class="cmp-caret" style="display:inline-block;width:13px;color:var(--accent)">&#9662;</span>${i+1}</td>
+       <td><b>${esc(x.city)}</b> <span class="muted">${esc(x.country)}</span></td>
+       <td class="muted">${esc(x.name)}</td>
+       <td class="muted">${x.out||""}${x.back?" → "+x.back:""}${x.nights!=null?" · "+x.nights+"n":""}</td>
+       <td class="pr"><b>${money(x.total)}</b><div class="muted" style="font-weight:400;font-size:12px">${brk(x)}</div></td>
+       <td><span class="bell" data-p="${esc(x.city)}" title="price-hunt ${esc(x.city)}">${BELL}</span></td></tr>
+     <tr class="cmp-det" id="cmprow-${i}" style="display:none"><td colspan="6" style="background:#f8fafc;padding:6px 12px 16px">
+       <div class="muted" style="font-size:12px;margin:2px 0 8px">Full detail — every airport, live fares, all Airbnb stays, buses</div>
+       <div id="cmpd-${i}"></div></td></tr>`).join("");
   $("results").innerHTML = `<h2 class="q">Cheapest destinations</h2>
-     <p class="lead">Full trip price — round-trip flights + a live place-to-stay + extras — ranked cheapest first. Cached flight estimates; confirm live. The bell adds a city to your Telegram price hunt.</p>
+     <p class="lead">Full trip price — round-trip flights + a live place-to-stay + extras — ranked cheapest first. <b>Tap any destination</b> to open every flight, all Airbnb options and the full cost breakdown. The bell adds a city to your Telegram price hunt.</p>
      <div class="card pad"><table><thead><tr><th>#</th><th>Destination</th><th>From</th><th>Dates</th><th style="text-align:right">Trip total</th><th></th></tr></thead>
      <tbody>${rows||`<tr><td colspan="6" class="muted">No results.</td></tr>`}</tbody></table></div>`;
-  $("results").querySelectorAll(".bell[data-p]").forEach(b=>b.onclick=()=>toggleHunt(b.dataset.p,"city"));
+  $("results").querySelectorAll("tr.cmp-sum").forEach(tr=>tr.onclick=()=>toggleCompareRow(+tr.dataset.i, tr.dataset.city));
+  $("results").querySelectorAll(".bell[data-p]").forEach(b=>b.onclick=e=>{ e.stopPropagation(); toggleHunt(b.dataset.p,"city"); });
+}
+
+function toggleCompareRow(i, city){
+  const caretOf=k=>$("results").querySelector(`.cmp-sum[data-i="${k}"] .cmp-caret`);
+  if(CMP_OPEN!=null){                 // remember the open row's stay/filter state, then collapse it
+    if(CUR_TAB && CITY_CACHE[CUR_TAB]) Object.assign(CITY_CACHE[CUR_TAB], {selstay:SELSTAY, filter:STAYFILTER, all:STAY_ALL});
+    const prev=$("cmprow-"+CMP_OPEN); if(prev) prev.style.display="none";
+    const pc=caretOf(CMP_OPEN); if(pc) pc.innerHTML="&#9662;";
+  }
+  if(CMP_OPEN===i){ CMP_OPEN=null; CUR_TAB=null; return; }   // tapping the open row closes it
+  CMP_OPEN=i;
+  const det=$("cmprow-"+i); if(det) det.style.display="table-row";
+  const c=caretOf(i); if(c) c.innerHTML="&#9652;";
+  SEL=city; RES_TARGET="cmpd-"+i; CUR_TAB=city;
+  const cached=CITY_CACHE[city];
+  if(cached){ LAST=cached.d; SELSTAY=cached.selstay; STAYFILTER=cached.filter; STAY_ALL=cached.all; renderResults(); }
+  else doSearch();   // reuse the classic single-city page, rendered inside this row
 }
 
 /* ---------- pick-to-hunt: select cities/countries on the site, bot notifies ---------- */
