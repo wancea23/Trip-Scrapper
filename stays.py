@@ -134,9 +134,19 @@ def _result_type(result):
     return "Stay"
 
 
+def _is_flex_dates(result, check_in, check_out):
+    """Airbnb pads sparse searches with listings 'available for slightly different
+    dates' - those carry the shifted checkin/checkout in listingParamOverrides and
+    are NOT bookable on the requested dates, so they must be dropped."""
+    ov = result.get("listingParamOverrides") or {}
+    ci, co = ov.get("checkin"), ov.get("checkout")
+    return bool((ci and ci != check_in) or (co and co != check_out))
+
+
 def airbnb_list(location, check_in, check_out, nights, currency, adults, limit=14):
     """Every stay the Airbnb search returns (homes, rooms, hotels, hostels, B&Bs...),
-    cheapest first, each tagged with its type."""
+    cheapest first, each tagged with its type. Only stays actually available on the
+    requested dates (Airbnb's flexible-date suggestions are filtered out)."""
     r = requests.get(_airbnb_url(location, check_in, check_out, adults, currency),
                      headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
                      timeout=25)
@@ -147,6 +157,8 @@ def airbnb_list(location, check_in, check_out, nights, currency, adults, limit=1
     results = [d for d in _walk(data) if d.get("__typename") == "StaySearchResult"]
     stays, seen = [], set()
     for res in results:
+        if _is_flex_dates(res, check_in, check_out):
+            continue
         price = _result_price(res)
         if price is None:
             continue
@@ -259,7 +271,9 @@ def cheapest_stay(location, check_in, nights, currency, cfg):
     """Cheapest place to stay + a list of options (homes/rooms/hotels/hostels...).
     Scrapes Airbnb first; falls back to RapidAPI Airbnb/Booking only if a key is set."""
     check_out = (datetime.strptime(check_in, "%Y-%m-%d") + timedelta(days=nights)).strftime("%Y-%m-%d")
-    adults = int(cfg.get("stay", {}).get("adults") or cfg.get("trip", {}).get("travelers", 1))
+    # the room must fit everyone travelling - config stay.adults is only a floor
+    adults = max(int(cfg.get("stay", {}).get("adults") or 1),
+                 int(cfg.get("trip", {}).get("travelers", 1) or 1))
     options = []
     try:
         options = airbnb_list(location, check_in, check_out, nights, currency, adults)

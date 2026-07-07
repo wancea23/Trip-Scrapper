@@ -333,8 +333,22 @@ function otherExtras(r){ return (r.extras||[]).filter(e=>e.total>0); }
 function busBackOf(r){ // no return flight -> return home by direct bus (real FlixBus quote)
   return (!r.one_way && !r.back && LAST && LAST.bus && LAST.bus.back)
     ? LAST.bus.back.price * (r.travelers||1) : 0; }
-function tripTotal(r){ const stay=SELSTAY?SELSTAY.stay_total:0;
-  return r.flight_total + (BAG_ON?bagOf(r):0) + groundOf(r) + busBackOf(r) + otherExtras(r).reduce((s,e)=>s+e.total,0) + stay; }
+function cardStayBase(r){ // the stay priced for THIS card's own flight dates
+  if(r.stay) return r.stay.stay_total;
+  return (!r.stay_dates && LAST && LAST.stay) ? LAST.stay.stay_total : 0; } // old payloads
+function sameWindow(a,b){ return a&&b&&a.stay_dates&&b.stay_dates
+  && a.stay_dates.check_in===b.stay_dates.check_in && a.stay_dates.nights===b.stay_dates.nights; }
+function baseTotal(r){ return r.flight_total + (BAG_ON?bagOf(r):0) + groundOf(r) + busBackOf(r)
+  + otherExtras(r).reduce((s,e)=>s+e.total,0) + cardStayBase(r); }
+function bestCard(){ // the result the stays list belongs to: cheapest full trip
+  if(!LAST||!LAST.results) return null;
+  let b=null; for(const r of LAST.results){ if(r.error) continue;
+    if(!b||baseTotal(r)<baseTotal(b)) b=r; } return b; }
+function cardStay(r){ // the user's picked stay applies to cards sharing its dates
+  const b=bestCard();
+  return (SELSTAY && (r===b || sameWindow(r,b))) ? SELSTAY.stay_total : cardStayBase(r); }
+function tripTotal(r){
+  return r.flight_total + (BAG_ON?bagOf(r):0) + groundOf(r) + busBackOf(r) + otherExtras(r).reduce((s,e)=>s+e.total,0) + cardStay(r); }
 
 /* ---------- boot ---------- */
 async function boot(){
@@ -543,7 +557,9 @@ async function doSearch(){
   if(MODE==="multi"||MODE==="compare") CITY_CACHE[SEL]={d, selstay:SELSTAY, filter:STAYFILTER, all:STAY_ALL};
 }
 
-function stayOptions(){ return LAST&&LAST.stay&&LAST.stay.options ? LAST.stay.options : (LAST&&LAST.stay?[LAST.stay]:[]); }
+function stayOptions(){ const b=bestCard();
+  const s=(b&&b.stay)||(LAST&&LAST.stay);
+  return s ? (s.options||[s]) : []; }
 
 /* ---------- results ---------- */
 function srcTag(l){ return l.source && l.source!=="cached"
@@ -564,7 +580,7 @@ function altBlock(opts,label){
 
 function flightCard(x){
   if(x.error) return `<div class="card pad"><b>${x.name} (${x.origin})</b><div class="muted" style="margin-top:6px">${x.error}</div></div>`;
-  const ttl = x.travelers, stay = SELSTAY ? SELSTAY.stay_total : 0;
+  const ttl = x.travelers, stay = cardStay(x);
   const bag = bagOf(x), others = otherExtras(x), bagInc = BAG_ON && bag>0;
   const noReturn = !x.one_way && !x.back;
   const tot = Math.round(tripTotal(x)*100)/100;
@@ -598,7 +614,7 @@ function flightCard(x){
         ${x.ground?`<div class="row"><span class="muted">Chișinău → ${x.ground.to} (${x.ground.mode})</span><span>${money(x.ground.total)}</span></div>`:""}
         ${busBackOf(x)?`<div class="row"><span class="muted">Return by bus (FlixBus${x.travelers>1?`, ${x.travelers} travelers`:""})</span><span>${money(busBackOf(x))}</span></div>`:""}
         ${others.map(e=>`<div class="row"><span class="muted">${e.name}</span><span>${money(e.total)}</span></div>`).join("")}
-        ${stay?`<div class="row"><span class="muted">Stay</span><span>${money(stay)}</span></div>`:""}
+        ${stay?`<div class="row"><span class="muted">Stay${x.stay_dates?` · ${x.stay_dates.nights} nights (${x.stay_dates.check_in} – ${x.stay_dates.check_out})`:""}</span><span>${money(stay)}</span></div>`:""}
         <div class="row t"><span>Total</span><span>~${money(tot)}</span></div>
       </div>
     </details>
@@ -606,7 +622,7 @@ function flightCard(x){
 }
 
 function renderResults(){
-  const d=LAST, opts=stayOptions(), sd=d.stay_dates;
+  const d=LAST, opts=stayOptions(), bcard=bestCard(), sd=(bcard&&bcard.stay_dates)||d.stay_dates;
   const flying=d.results.filter(r=>!r.error);
   const cheapestTotal = flying.length ? Math.min(...flying.map(tripTotal)) : null;
   // in multi mode, feed the ACCURATE total (live fares, respecting the bag/stay
@@ -669,7 +685,7 @@ function renderResults(){
   }
 
   // stays (compact: 6 shown, filterable, tap to use)
-  html += `<div class="sect-title">Places to stay${ sd?` · ${sd.nights} nights, matches the flight`:""}</div>`;
+  html += `<div class="sect-title">Places to stay${ sd?` · ${sd.nights} nights, ${sd.check_in} – ${sd.check_out}${bcard&&sd.check_in===bcard.out_date?", matches the cheapest flight":""}`:""}</div>`;
   if(opts.length){
     const types=["All",...new Set(opts.map(o=>o.type))];
     const shown = opts.filter(o=>STAYFILTER==="All"||o.type===STAYFILTER);

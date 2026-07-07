@@ -132,28 +132,45 @@ def do_search(body):
             items, etot = ts.compute_extras(extras_def, travelers, r.get("actual_nights") or nmin)
             r["extras"], r["extras_total"] = items, etot
 
-    # match the stay to the CHEAPEST flight's real dates + nights
-    stay, stay_dates = None, None
+    # each origin's cheapest flight can land on completely different dates, so a
+    # single stay can't serve every card - fetch one stay PER date window (cached,
+    # so origins sharing dates cost one Airbnb scrape) and attach it to its flight
+    stay, stay_dates, bus = None, None, None
     flying = [r for r in results if "flight_total" in r]
-    if body.get("with_stay", True) and flying:
-        best = min(flying, key=lambda r: r["flight_total"])
-        check_in = best["out_date"]
-        nights = best["actual_nights"] or ts.nights_bounds(c["trip"])[0]
-        check_out = (datetime.strptime(check_in, "%Y-%m-%d")
-                     + timedelta(days=nights)).strftime("%Y-%m-%d")
-        stay = ts.fetch_stay(hotel_loc, check_in, nights, c)
-        stay_dates = {"check_in": check_in, "check_out": check_out, "nights": nights}
-
-    # direct long-distance bus Chisinau <-> destination (real FlixBus quotes),
-    # both a flight alternative and the return fix when no return flight exists
-    bus = None
+    with_stay = body.get("with_stay", True)
     if flying:
-        best = min(flying, key=lambda r: r["flight_total"])
-        nights = best["actual_nights"] or nmin
-        date_back = (datetime.strptime(best["out_date"], "%Y-%m-%d")
-                     + timedelta(days=nights)).strftime("%Y-%m-%d")
+        stay_cache = {}
+        for r in flying:
+            nights = r["actual_nights"] or nmin
+            check_in = r["out_date"]
+            check_out = (datetime.strptime(check_in, "%Y-%m-%d")
+                         + timedelta(days=nights)).strftime("%Y-%m-%d")
+            r["stay_dates"] = {"check_in": check_in, "check_out": check_out,
+                               "nights": nights}
+            r["stay"] = None
+            if with_stay:
+                key = (check_in, nights)
+                if key not in stay_cache:
+                    try:
+                        stay_cache[key] = ts.fetch_stay(hotel_loc, check_in, nights, c)
+                    except Exception:
+                        stay_cache[key] = None
+                r["stay"] = stay_cache[key]
+
+        # headline stay + bus belong to the trip the UI ranks first: the cheapest
+        # FULL trip (flights + ground + stay + extras), not the cheapest bare fare
+        def full_total(r):
+            st = r["stay"]["stay_total"] if r.get("stay") else 0
+            ground = r["ground"]["total"] if r.get("ground") else 0
+            return r["flight_total"] + ground + st + r.get("extras_total", 0)
+
+        best = min(flying, key=full_total)
+        stay, stay_dates = best["stay"], best["stay_dates"]
+        # direct long-distance bus Chisinau <-> destination (real FlixBus quotes),
+        # both a flight alternative and the return fix when no return flight exists
         try:
-            bus = ts.sources.bus_home_options(hotel_loc, best["out_date"], date_back)
+            bus = ts.sources.bus_home_options(hotel_loc, best["out_date"],
+                                              best["stay_dates"]["check_out"])
         except Exception:
             bus = None
     return {"label": label, "currency": c["currency"].upper(),
@@ -251,14 +268,18 @@ def do_compare(body):
             # full trip = flights + (optional bag) + ground transport + stay + extras,
             # the same math the single-city and multi-compare pages use
             loc = info.get("hotel_location", name)
-            stay = None
+            stay, stay_ci, stay_n = None, r["out"]["date"], nights
             if with_stay:
                 if loc not in stay_cache:
                     try:
-                        stay_cache[loc] = ts.fetch_stay(loc, r["out"]["date"], nights, c)
+                        stay_cache[loc] = (ts.fetch_stay(loc, r["out"]["date"], nights, c),
+                                           r["out"]["date"], nights)
                     except Exception:
-                        stay_cache[loc] = None
-                stay = stay_cache[loc]
+                        stay_cache[loc] = (None, r["out"]["date"], nights)
+                # the cache is per city (one Airbnb scrape each), so a later origin's
+                # row may reuse a stay scraped for the FIRST origin's dates - keep the
+                # dates it was really scraped for, so the drill-down never lies
+                stay, stay_ci, stay_n = stay_cache[loc]
             stay_total = stay["stay_total"] if stay else 0
             ground = r["ground"]["total"] if r.get("ground") else 0
             items, extras_total = ts.compute_extras(extras_def, travelers, nights)
@@ -270,14 +291,14 @@ def do_compare(body):
                     label_cache[name] = ts.resolve_destination(name, cities)[2]
                 except Exception:
                     label_cache[name] = name
-            check_out = (datetime.strptime(r["out"]["date"], "%Y-%m-%d")
-                         + timedelta(days=nights)).strftime("%Y-%m-%d")
+            check_out = (datetime.strptime(stay_ci, "%Y-%m-%d")
+                         + timedelta(days=stay_n)).strftime("%Y-%m-%d")
+            sd = {"check_in": stay_ci, "check_out": check_out, "nights": stay_n}
+            r["stay"], r["stay_dates"] = stay, sd  # per-card stay, like /api/search
             # the FULL page for this exact row (same origin/dates/fares/stay), so the
             # UI dropdown renders it directly - no second search, numbers always match
             detail = {"label": label_cache[name], "results": [r], "stay": stay,
-                      "stay_dates": {"check_in": r["out"]["date"],
-                                     "check_out": check_out, "nights": nights},
-                      "bus": None}
+                      "stay_dates": sd, "bus": None}
             rows.append({"total": grand, "flights": r["flight_total"],
                          "bag": r["bag_total"], "ground": ground,
                          "stay": stay_total, "stay_name": stay["name"] if stay else None,
