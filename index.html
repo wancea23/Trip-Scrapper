@@ -860,13 +860,19 @@ async function doMulti(){
   html+=`</div>`;
   // THE OLD UI, per city: every airport's flights, all stays, buses - tabs to switch
   if(ok.length){
-    html+=`<div class="sect-title">Full breakdown — the classic page per city: every airport, live fares, all stays, buses</div>
+    html+=`<div class="sect-title">Full breakdown — tap a city for its cheapest route, all stays and buses (matches the ranking, opens instantly)</div>
       <div class="chips" id="cityTabs" style="margin-bottom:14px">`+
       ok.map(r=>`<div class="chip" data-c="${esc(r.city)}">${esc(r.city)}<span class="code">${money(r.total)}</span></div>`).join("")+
       `</div><div id="cityResults"></div>`;
   }
   $("results").innerHTML=html;
   const ROWS=d.rows;
+  // every city's full page was ALREADY computed for the ranking -> cache each one so
+  // its tab opens INSTANTLY, no "Finding flights…" spinner, numbers match the ranking
+  ROWS.forEach(r=>{ if(r.detail){
+    const s=r.detail.stay, opts=s?(s.options||[s]):[];
+    CITY_CACHE[r.city]={d:r.detail, selstay:opts[0]||null, filter:"All", all:false};
+  }});
   // a loaded city tab reports its accurate total (live fares + your checkbox
   // choices) - update the ranking line, the hunt prefill, and the hero number
   window.onCityTotal=(city,total,flights)=>{

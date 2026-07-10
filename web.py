@@ -415,7 +415,7 @@ def do_multi(body):
                 stay = None
         stay_total = stay["stay_total"] if stay else 0
         ground = best["ground"]["total"] if best.get("ground") else 0
-        extras_total = ts.compute_extras(extras_def, travelers, nights)[1]
+        items, extras_total = ts.compute_extras(extras_def, travelers, nights)
         grand = round(best["flight_total"] + (best["bag_total"] if include_bag else 0)
                       + ground + (best.get("bus_back") or 0) + stay_total + extras_total, 2)
         # show the way home honestly: the return-flight date only when we're actually
@@ -426,6 +426,23 @@ def do_multi(body):
             back_date = None
         else:
             back_date = best["back"]["date"] if best.get("back") else None
+        # the FULL drill-down page for this city, built from the data JUST computed -
+        # so opening its tab renders instantly (no second search) and the numbers
+        # match the ranking exactly, same as the Compare-all dropdown
+        check_out = (datetime.strptime(best["out_date"], "%Y-%m-%d")
+                     + timedelta(days=nights)).strftime("%Y-%m-%d") if best.get("out_date") else None
+        sd = {"check_in": best["out_date"], "check_out": check_out,
+              "nights": nights} if best.get("out_date") else None
+        best["stay"], best["stay_dates"] = stay, sd
+        best["extras"], best["extras_total"] = items, extras_total
+        try:
+            label = ts.resolve_destination(name, cities)[2]
+        except Exception:
+            label = name
+        detail = {"label": label, "results": [best], "stay": stay, "stay_dates": sd,
+                  "bus": city_bus, "bus_card": bool(best.get("bus_only")), "no_trip": False,
+                  "one_way": one_way, "out_mode": _mode_name(out_modes),
+                  "back_mode": _mode_name(back_modes)}
         rows.append({"total": grand, "flights": best["flight_total"],
                      "bag": best["bag_total"], "ground": ground,
                      "bus_back": best.get("bus_back") or 0,
@@ -434,7 +451,7 @@ def do_multi(body):
                      "extras": extras_total, "city": name,
                      "country": info.get("country", "?"), "origin": best["origin"],
                      "name": best["name"], "out": best["out"]["date"],
-                     "back": back_date,
+                     "back": back_date, "detail": detail,
                      "nights": best["actual_nights"], "link": best["booking_link"]})
     rows.sort(key=lambda x: x["total"] if x["total"] is not None else float("inf"))
     return {"currency": c["currency"].upper(), "rows": rows, "unknown": unknown,
