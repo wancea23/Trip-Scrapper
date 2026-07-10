@@ -1,5 +1,6 @@
 # --- SECRETS (never commit to a public repo) ---
 token.txt
+tg_token.txt
 .env
 secrets.json
 config.local.json

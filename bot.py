@@ -34,7 +34,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
@@ -52,8 +52,20 @@ _STARTED = False
 
 
 def bot_token(cfg):
-    return (os.environ.get("TELEGRAM_BOT_TOKEN")
-            or (cfg.get("telegram") or {}).get("bot_token") or "").strip()
+    """Env var -> gitignored tg_token.txt -> config.json (public repo: keep the
+    real token OUT of config.json, same rule as the Travelpayouts token.txt)."""
+    env = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if env:
+        return env.strip()
+    tpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tg_token.txt")
+    if os.path.exists(tpath):
+        try:
+            t = open(tpath, "r", encoding="utf-8").read().strip()
+            if t:
+                return t
+        except OSError:
+            pass
+    return ((cfg.get("telegram") or {}).get("bot_token") or "").strip()
 
 
 def tg(token, method, **params):
@@ -94,7 +106,14 @@ def _db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER, place TEXT, kind TEXT,
                     max_price REAL, currency TEXT, created TEXT,
-                    last_price REAL, last_checked TEXT, last_alert REAL)""")
+                    last_price REAL, last_checked TEXT, last_alert REAL,
+                    metric TEXT DEFAULT 'total', include_bag INTEGER DEFAULT 0)""")
+    for stmt in ("ALTER TABLE hunts ADD COLUMN metric TEXT DEFAULT 'total'",
+                 "ALTER TABLE hunts ADD COLUMN include_bag INTEGER DEFAULT 0"):
+        try:  # migrate older hunts tables
+            db.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
     db.commit()
     return db
 
@@ -141,24 +160,25 @@ def paired_users():
     return [{"chat_id": r[0], "name": r[1], "linked_at": r[2]} for r in rows]
 
 
-def add_hunt(chat_id, place, kind, max_price, currency):
+def add_hunt(chat_id, place, kind, max_price, currency, metric="total", include_bag=0):
     db = _db()
-    db.execute("INSERT INTO hunts (chat_id, place, kind, max_price, currency, created) "
-               "VALUES (?,?,?,?,?,?)",
+    db.execute("INSERT INTO hunts (chat_id, place, kind, max_price, currency, created, metric, include_bag) "
+               "VALUES (?,?,?,?,?,?,?,?)",
                (chat_id, place, kind, max_price, currency,
-                datetime.now().isoformat(timespec="seconds")))
+                datetime.now().isoformat(timespec="seconds"), metric, 1 if include_bag else 0))
     db.commit()
     db.close()
 
 
 def list_hunts(chat_id=None):
     db = _db()
-    q = "SELECT id, chat_id, place, kind, max_price, currency, last_price, last_checked, last_alert FROM hunts"
+    q = ("SELECT id, chat_id, place, kind, max_price, currency, last_price, "
+         "last_checked, last_alert, metric, include_bag FROM hunts")
     rows = (db.execute(q + " WHERE chat_id=? ORDER BY id", (chat_id,)) if chat_id
             else db.execute(q + " ORDER BY id")).fetchall()
     db.close()
     keys = ("id", "chat_id", "place", "kind", "max_price", "currency",
-            "last_price", "last_checked", "last_alert")
+            "last_price", "last_checked", "last_alert", "metric", "include_bag")
     return [dict(zip(keys, r)) for r in rows]
 
 
@@ -212,50 +232,136 @@ def resolve_place(name, cities):
 
 
 def hunt_targets(hunt, cities):
-    """The (label, iata) destinations one hunt covers."""
+    """The (label, iata, hotel_location) destinations one hunt covers."""
     if hunt["kind"] == "country":
-        return [(city, c["airport"]) for city, c in cities.items()
+        return [(city, c["airport"], c.get("hotel_location", city)) for city, c in cities.items()
                 if not city.startswith("_") and c.get("country") == hunt["place"]]
     if hunt["kind"] == "airport":
-        return [(hunt["place"], hunt["place"])]
+        return [(hunt["place"], hunt["place"], hunt["place"])]
     c = cities.get(hunt["place"])
-    return [(hunt["place"], c["airport"])] if c else []
+    return [(hunt["place"], c["airport"], c.get("hotel_location", hunt["place"]))] if c else []
 
 
 # --------------------------------------------------------------------------- #
-#  Checking a hunt = cheapest round-trip FLIGHT total across origins & targets
+#  Checking a hunt: what it watches depends on its metric -
+#  total = the whole trip (flights + bag + ground + stay + extras, + bus home
+#          when there's no return flight - same math as the app's TRIP TOTAL)
+#  flight = round-trip flights only · bus = direct bus there+back · stay = the room
 # --------------------------------------------------------------------------- #
+METRIC_LABEL = {"total": "full trip", "flight": "flights", "bus": "bus", "stay": "stay"}
+METRIC_ALIAS = {"total": "total", "full": "total", "trip": "total",
+                "flight": "flight", "flights": "flight",
+                "bus": "bus", "stay": "stay", "stays": "stay", "hotel": "stay"}
+
+
+def _best_flight(iata, cfg, include_real):
+    """Cheapest fetch_flights result across the configured origins, or None."""
+    best, borig = None, None
+    for origin in cfg.get("origins", ["IAS", "RMO"]):
+        try:
+            f = ts.fetch_flights(origin, iata, cfg, include_real=include_real)
+        except Exception:
+            continue
+        if f and (best is None or f["flight_total"] < best["flight_total"]):
+            best, borig = f, origin
+    return best, borig
+
+
+def _price_city(metric, label, iata, hloc, cfg, include_real, include_bag=False):
+    """Current price of `metric` for one destination city, or None. The checked
+    bag is an opt-IN (matches the UI checkbox, unchecked by default)."""
+    t = cfg["trip"]
+    travelers = max(1, int(t.get("travelers", 1)))
+    nmin = ts.nights_bounds(t)[0]
+
+    if metric == "stay":
+        try:
+            s = ts.fetch_stay(hloc, t["depart_from"], nmin, cfg)
+        except Exception:
+            s = None
+        if not s:
+            return None
+        return {"total": s["stay_total"], "city": label, "travelers": travelers,
+                "what": f"{s['name']}, {nmin} nights from {t['depart_from']}",
+                "link": s.get("link") or "https://www.airbnb.com"}
+
+    if metric == "bus":
+        back_date = (datetime.strptime(t["depart_from"], "%Y-%m-%d")
+                     + timedelta(days=nmin)).strftime("%Y-%m-%d")
+        try:
+            b = ts.sources.bus_home_options(hloc, t["depart_from"], back_date)
+        except Exception:
+            b = None
+        if not b or not (b.get("out") or b.get("back")):
+            return None
+        legs = [x for x in (b.get("out"), b.get("back")) if x]
+        total = round(sum(x["price"] for x in legs) * travelers, 2)
+        what = "there + back" if len(legs) == 2 else ("one direction only - check the other on infobus")
+        return {"total": total, "city": label, "travelers": travelers,
+                "what": f"FlixBus {what}, dep {t['depart_from']}",
+                "link": legs[0]["book"] or b["infobus_out"]}
+
+    f, origin = _best_flight(iata, cfg, include_real)
+    if not f:
+        return None
+    dates = f["out"]["date"] + (f" → {f['back']['date']}" if f["back"] else " (one-way)")
+    base = {"city": label, "travelers": travelers, "link": f["booking_link"],
+            "what": f"from {ts.ORIGIN_NAMES.get(origin, origin)}, {dates}"}
+
+    if metric == "flight":
+        return {**base, "total": f["flight_total"]}
+
+    # total: the app's TRIP TOTAL - flights + bag + ground + stay + extras
+    # (+ the bus ride home when there's no return flight)
+    nights = f["actual_nights"] or nmin
+    stay_total = 0
+    try:
+        s = ts.fetch_stay(hloc, f["out"]["date"], nights, cfg)
+        stay_total = s["stay_total"] if s else 0
+    except Exception:
+        pass
+    g = ts.sources.ground_to_airport(origin, f["out"]["date"])
+    ground = round(g["price"] * travelers * f["bag_legs"], 2) if g else 0
+    extras_total = ts.compute_extras(cfg.get("extras", []), travelers, nights)[1]
+    bus_back = 0
+    if not f["one_way"] and not f["back"]:
+        try:
+            back_date = (datetime.strptime(f["out"]["date"], "%Y-%m-%d")
+                         + timedelta(days=nights)).strftime("%Y-%m-%d")
+            b = ts.sources.bus_home_options(hloc, f["out"]["date"], back_date)
+            if b and b.get("back"):
+                bus_back = round(b["back"]["price"] * travelers, 2)
+        except Exception:
+            pass
+    grand = round(f["flight_total"] + (f["bag_total"] if include_bag else 0)
+                  + ground + bus_back + stay_total + extras_total, 2)
+    return {**base, "total": grand,
+            "what": base["what"] + (f", stay {stay_total:g}" if stay_total else ", no stay found")}
+
+
 def check_hunt(hunt, cfg, cities):
     """Best current price for one hunt, or None. Airline-site scrapers only run
     for small hunts (a country can be many cities - stay polite)."""
     targets = hunt_targets(hunt, cities)
     include_real = len(targets) <= 2
+    metric = METRIC_ALIAS.get(hunt.get("metric") or "total", "total")
+    include_bag = bool(hunt.get("include_bag"))
     best = None
-    for label, iata in targets:
-        for origin in cfg.get("origins", ["IAS", "RMO"]):
-            try:
-                f = ts.fetch_flights(origin, iata, cfg, include_real=include_real)
-            except Exception:
-                continue
-            if not f:
-                continue
-            if best is None or f["flight_total"] < best["total"]:
-                best = {"total": f["flight_total"], "city": label, "origin": origin,
-                        "origin_name": ts.ORIGIN_NAMES.get(origin, origin),
-                        "out": f["out"]["date"],
-                        "back": f["back"]["date"] if f["back"] else None,
-                        "link": f["booking_link"], "travelers": f["travelers"]}
+    for label, iata, hloc in targets:
+        r = _price_city(metric, label, iata, hloc, cfg, include_real, include_bag)
+        if r and (best is None or r["total"] < best["total"]):
+            best = r
     return best
 
 
 def fmt_best(hunt, best, cur):
+    metric = METRIC_LABEL.get(METRIC_ALIAS.get(hunt.get("metric") or "total", "total"))
     if not best:
-        return f"<b>{hunt['place']}</b> ≤{hunt['max_price']:g}: no flights found right now"
+        return f"<b>{hunt['place']}</b> ({metric}) ≤{hunt['max_price']:g}: no price found right now"
     hit = "✅" if best["total"] <= hunt["max_price"] else "…"
-    dates = best["out"] + (f" → {best['back']}" if best["back"] else " (one-way)")
     pax = f", {best['travelers']} travelers" if best["travelers"] > 1 else ""
-    return (f"{hit} <b>{hunt['place']}</b> ≤{hunt['max_price']:g}: now <b>{best['total']:g} {cur}</b>"
-            f" ({best['city']} from {best['origin_name']}, {dates}{pax})\n"
+    return (f"{hit} <b>{hunt['place']}</b> {metric} ≤{hunt['max_price']:g}: "
+            f"now <b>{best['total']:g} {cur}</b> ({best['city']} {best['what']}{pax})\n"
             f"<a href=\"{best['link']}\">book</a>")
 
 
@@ -271,7 +377,7 @@ def check_and_alert(hunt, cfg, cities, token):
     if hit and dropped:
         send(token, hunt["chat_id"],
              "🎯 Price hunt hit!\n" + fmt_best(hunt, best, cur) +
-             "\n(flights only - open the app for the all-in total)")
+             "\n(open the app for the full breakdown)")
         record_check(hunt["id"], best["total"], alerted=best["total"])
     else:
         record_check(hunt["id"], best["total"])
@@ -283,10 +389,15 @@ def check_and_alert(hunt, cfg, cities, token):
 HELP = (
     "<b>Trip-Scrapper price hunts</b>\n"
     "/hunt <i>place[, place…]</i> <i>price</i> — hunt a city, a whole country, or several "
-    "at once, alert at/below <i>price</i> (round-trip flights, your app dates/origins)\n"
+    "at once, alert when the <b>full trip total</b> (flights + bag + ground + stay + extras) "
+    "is at/below <i>price</i>\n"
     "    /hunt Prague 250\n"
     "    /hunt Italy 300\n"
     "    /hunt Vienna, Budapest, Japan 400\n"
+    "Watch just one part instead - start with <b>flight</b>, <b>bus</b> or <b>stay</b>:\n"
+    "    /hunt flight Prague 80\n"
+    "    /hunt bus Prague 90\n"
+    "    /hunt stay Italy 120\n"
     "/list — your hunts + last seen price\n"
     "/check — re-check all your hunts now\n"
     "/remove <i>n</i> — stop hunt n (numbers from /list)\n"
@@ -295,15 +406,18 @@ HELP = (
 
 
 def _cmd_hunt(text, chat_id, cfg, cities, token):
-    m = re.match(r"/hunt\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s*$", text, re.I | re.S)
+    m = re.match(r"/hunt\s+(?:(total|full|trip|flights?|bus|stays?|hotel)\s+)?(.+?)\s+(\d+(?:[.,]\d+)?)\s*$",
+                 text, re.I | re.S)
     if not m:
-        send(token, chat_id, "Usage: /hunt <place>[, more places] <max price>\n"
-                             "e.g. <code>/hunt Prague 250</code> or <code>/hunt Italy, Spain 300</code>")
+        send(token, chat_id, "Usage: /hunt [flight|bus|stay] <place>[, more places] <max price>\n"
+                             "e.g. <code>/hunt Prague 250</code> (full trip) or "
+                             "<code>/hunt flight Prague 80</code>")
         return
-    price = float(m.group(2).replace(",", "."))
+    metric = METRIC_ALIAS.get((m.group(1) or "total").lower(), "total")
+    price = float(m.group(3).replace(",", "."))
     cur = cfg["currency"].upper()
     added, errors = [], []
-    for raw in m.group(1).split(","):
+    for raw in m.group(2).split(","):
         raw = raw.strip()
         if not raw:
             continue
@@ -311,13 +425,13 @@ def _cmd_hunt(text, chat_id, cfg, cities, token):
         if kind is None:
             errors.append(f"'{raw}'" + (f" — did you mean <b>{place}</b>?" if place else ""))
             continue
-        add_hunt(chat_id, place, kind, price, cur)
+        add_hunt(chat_id, place, kind, price, cur, metric)
         n = len(hunt_targets({"kind": kind, "place": place}, cities))
         added.append(f"<b>{place}</b>" + (f" ({kind}, {n} cities)" if kind == "country" else ""))
     lines = []
     if added:
-        lines.append(f"🔭 Hunting {', '.join(added)} at ≤{price:g} {cur}. "
-                     f"I'll ping you when flights drop to that. /list to see all.")
+        lines.append(f"🔭 Hunting {', '.join(added)}: {METRIC_LABEL[metric]} at ≤{price:g} {cur}. "
+                     f"I'll ping you when it drops to that. /list to see all.")
     if errors:
         lines.append("Didn't recognise " + "; ".join(errors) +
                      "\n(city or country names as in the app, e.g. Prague, Italy)")
@@ -330,11 +444,13 @@ def _cmd_list(chat_id, cfg, token):
         send(token, chat_id, "No hunts yet. Start one: <code>/hunt Prague 250</code>")
         return
     cur = cfg["currency"].upper()
-    lines = ["<b>Your price hunts</b> (flights, round trip)"]
+    lines = ["<b>Your price hunts</b>"]
     for i, h in enumerate(hunts, 1):
         last = (f"last {h['last_price']:g} {cur} at {h['last_checked'][5:16].replace('T', ' ')}"
                 if h["last_price"] is not None else "not checked yet")
-        lines.append(f"{i}. <b>{h['place']}</b> ({h['kind']}) ≤{h['max_price']:g} {cur} — {last}")
+        metric = METRIC_LABEL.get(METRIC_ALIAS.get(h.get("metric") or "total", "total"))
+        bag = " +bag" if h.get("include_bag") else ""
+        lines.append(f"{i}. <b>{h['place']}</b> ({h['kind']}, {metric}{bag}) ≤{h['max_price']:g} {cur} — {last}")
     lines.append("/check to re-check now · /remove n to stop one")
     send(token, chat_id, "\n".join(lines))
 
@@ -416,6 +532,9 @@ def _handle(msg, cfg, cities, token):
 #  The two loops: long-poll commands + periodic hunt watcher
 # --------------------------------------------------------------------------- #
 def poll_loop(cfg, token):
+    # a leftover webhook makes getUpdates fail with 409 forever (and tg() swallows the
+    # error), so the bot would look dead. Clear it before we long-poll.
+    tg(token, "deleteWebhook", drop_pending_updates=False)
     # skip any backlog from before this start so we don't answer stale messages
     offset = 0
     stale = tg(token, "getUpdates", timeout=0) or []
@@ -497,13 +616,14 @@ def hunts_payload():
     return {"hunts": list_hunts(), "users": paired_users()}
 
 
-def add_hunts_ui(places, price, cfg):
+def add_hunts_ui(places, price, cfg, metric="total", include_bag=False):
     """Add hunts from the web UI for the most recently paired chat."""
     users = paired_users()
     if not users:
         raise ValueError("no Telegram linked yet - pair with the code first")
     chat_id = users[-1]["chat_id"]
     cities = ts.load_json(ts.CITIES_PATH)
+    metric = METRIC_ALIAS.get(str(metric or "total").lower(), "total")
     try:
         price = float(price)
     except (TypeError, ValueError):
@@ -519,7 +639,7 @@ def add_hunts_ui(places, price, cfg):
         if kind is None:
             errors.append(raw + (f" (did you mean {place}?)" if place else ""))
             continue
-        add_hunt(chat_id, place, kind, price, cfg["currency"].upper())
+        add_hunt(chat_id, place, kind, price, cfg["currency"].upper(), metric, include_bag)
         added.append(place)
     if not added and errors:
         raise ValueError("didn't recognise: " + "; ".join(errors))

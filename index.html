@@ -78,6 +78,9 @@
   .seg button{border:none;background:transparent;font-family:inherit;font-size:14px;font-weight:600;
        color:var(--sub);padding:8px 16px;border-radius:9px;cursor:pointer}
   .seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.08)}
+  .seg.mode{display:flex;width:100%}
+  .seg.mode button{flex:1;padding:8px 10px}
+  .seg.off{opacity:.45;pointer-events:none}
 
   /* chips */
   .chips{display:flex;flex-wrap:wrap;gap:9px}
@@ -265,6 +268,25 @@
           <button data-v="oneway">One-way</button>
         </div>
       </div>
+      <div class="grid2" style="margin-bottom:10px">
+        <div class="field">
+          <label>Get there by</label>
+          <div class="seg mode" id="outmode">
+            <button data-v="both">Both</button>
+            <button data-v="plane" class="on">✈ Plane</button>
+            <button data-v="bus">🚌 Bus</button>
+          </div>
+        </div>
+        <div class="field" id="backModeField">
+          <label>Return by</label>
+          <div class="seg mode" id="backmode">
+            <button data-v="both" class="on">Both</button>
+            <button data-v="plane">✈ Plane</button>
+            <button data-v="bus">🚌 Bus</button>
+          </div>
+        </div>
+      </div>
+      <p class="lead" id="modeHint" style="font-size:13px;margin:0 2px 18px;color:var(--sub)"></p>
       <div class="grid2" style="margin-bottom:18px">
         <div class="field"><label>Depart between</label><input type="date" id="from"></div>
         <div class="field"><label>and</label><input type="date" id="to"></div>
@@ -330,7 +352,9 @@ function perLabel(p){ return {trip:"per trip",person:"per person",night:"per nig
 function bagOf(r){ return r.bag_total||0; }
 function groundOf(r){ return r.ground ? r.ground.total : 0; }
 function otherExtras(r){ return (r.extras||[]).filter(e=>e.total>0); }
-function busBackOf(r){ // no return flight -> return home by direct bus (real FlixBus quote)
+function busBackOf(r){ // backend sets bus_back when the chosen return is the direct bus
+  if(typeof r.bus_back==="number") return r.bus_back;
+  // old payloads: no return flight -> return home by direct bus (real FlixBus quote)
   return (!r.one_way && !r.back && LAST && LAST.bus && LAST.bus.back)
     ? LAST.bus.back.price * (r.travelers||1) : 0; }
 function cardStayBase(r){ // the stay priced for THIS card's own flight dates
@@ -360,8 +384,28 @@ async function boot(){
   $("origins").innerHTML = ORIGINS.map((o,i)=>`<div class="chip ${i<2?'on':''}" data-o="${o}">${o}</div>`).join("");
   $("origins").querySelectorAll(".chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
   $("triptype").querySelectorAll("button").forEach(b=>b.onclick=()=>{
-    $("triptype").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); });
-  renderExtras(); renderStepper(); goStep(1); setTimeout(initMap, 30);
+    $("triptype").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); updateModeUI(); });
+  ["outmode","backmode"].forEach(id=>$(id).querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    $(id).querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); updateModeUI(); }));
+  renderExtras(); renderStepper(); goStep(1); updateModeUI(); setTimeout(initMap, 30);
+}
+
+/* transport mode pickers (plane / bus / both, per direction) */
+function segVal(id){ const b=$(id).querySelector("button.on"); return b?b.dataset.v:"both"; }
+function outMode(){ return segVal("outmode"); }
+function backMode(){ return segVal("backmode"); }
+function updateModeUI(){
+  const oneway = tripType()==="oneway";
+  $("backModeField").classList.toggle("off", oneway);   // no return leg to choose
+  const om=outMode(), bm=backMode();
+  let hint="";
+  if(oneway) hint="One-way: only the outbound matters.";
+  else if(om==="bus" && bm==="plane")
+    hint="⚠ Bus there + fly back isn't offered — pick Bus or Both for the return, or fly out too.";
+  else if(bm==="plane") hint="Return by plane only — places with no return flight are hidden.";
+  else if(bm==="bus") hint="Return by bus only — places with no direct bus home are hidden.";
+  else hint="A place is shown only if there's a way back (return flight or direct bus).";
+  $("modeHint").textContent=hint;
 }
 
 let travelers=1;
@@ -537,6 +581,7 @@ function tripType(){ return $("triptype").querySelector("button.on").dataset.v; 
 function body(extra){
   return Object.assign({ type:tripType(), depart_from:$("from").value, depart_to:$("to").value,
     nights_min:$("nmin").value, nights_max:$("nmax").value, travelers, origins:originsSel(),
+    out_mode:outMode(), back_mode:backMode(),
     extras:EXTRAS, include_bag:BAG_ON }, extra);
 }
 
@@ -582,34 +627,40 @@ function flightCard(x){
   if(x.error) return `<div class="card pad"><b>${x.name} (${x.origin})</b><div class="muted" style="margin-top:6px">${x.error}</div></div>`;
   const ttl = x.travelers, stay = cardStay(x);
   const bag = bagOf(x), others = otherExtras(x), bagInc = BAG_ON && bag>0;
-  const noReturn = !x.one_way && !x.back;
+  const retBus = !x.one_way && x.return_mode==="bus";  // ride home by the direct bus
   const tot = Math.round(tripTotal(x)*100)/100;
-  const kind = x.one_way ? "one-way" : (noReturn ? "round trip · no return found" : "round trip");
+  const kind = x.bus_only ? (x.one_way?"direct bus · one-way":"direct bus · there & back")
+    : (x.one_way ? "one-way" : (retBus ? "flight out · bus home" : "round trip"));
   const bagToggle = bag>0 ? `<label class="bagopt"><input type="checkbox" class="bagchk" ${BAG_ON?"checked":""}>
        <span>Include checked bag <b>+${money(bag)}</b>
        <span class="muted" style="font-weight:400">— ${x.bag_airline} estimate (${x.bag_legs} leg${x.bag_legs>1?"s":""}${ttl>1?", "+ttl+" travelers":""}); exact price on the booking page</span></span></label>` : "";
+  // the way home: a return flight, the direct bus, or (one-way) nothing
+  const bb = (LAST.bus && LAST.bus.back) || (x.bus_only ? x.back : null);
+  const returnBlock = x.one_way ? ""
+    : x.bus_only ? legRow("Return", x.back)
+    : x.return_mode==="flight"
+      ? legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
+    : retBus && bb ? `<div class="leg"><div><div class="wh">Return by direct bus${x.actual_nights?` · ~${x.actual_nights} nights`:""}</div>
+            <div class="det">${LAST.label} → Chișinău · FlixBus · pick your date on FlixBus · <a href="${bb.book}" target="_blank">book</a>${LAST.bus&&LAST.bus.infobus_back?` · <a href="${LAST.bus.infobus_back}" target="_blank">more carriers</a>`:""}</div></div>
+            <div class="price">${money(bb.price)}${ttl>1?'<span class="muted" style="font-weight:400;font-size:12px"> /person</span>':''}</div></div>`
+    : "";
   return `<div class="card pad" style="margin-bottom:16px">
     <div class="fhead">
       <div><div class="ftitle">${x.name} → ${LAST.label}</div><div class="fmeta">${kind} · ${ttl} traveler${ttl>1?"s":""}</div></div>
-      <a class="flink" href="${x.booking_link}" target="_blank">${x.one_way?"Book one-way":"Book round trip"} &rarr;</a>
+      <a class="flink" href="${x.booking_link}" target="_blank">${x.bus_only?"Book bus":(x.one_way?"Book one-way":"Book round trip")} &rarr;</a>
     </div>
     ${legRow("Outbound", x.out)}
-    ${altBlock(x.out_options,"outbound")}
-    ${x.one_way?"":(x.back?legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
-       :(LAST.bus&&LAST.bus.back
-         ?`<div class="leg"><div><div class="wh">No return flight — return by direct bus</div>
-            <div class="det">${LAST.label} → Chișinău · FlixBus · ${(LAST.bus.back.dep||"").slice(0,16).replace("T"," ")} · <a href="${LAST.bus.back.book}" target="_blank">book</a> · <a href="${LAST.bus.infobus_back}" target="_blank">more carriers</a></div></div>
-            <div class="price">${money(LAST.bus.back.price)}${x.travelers>1?'<span class="muted" style="font-weight:400;font-size:12px"> /person</span>':''}</div></div>`
-         :`<div class="leg"><div class="wh">No return flight found — outbound only</div><div></div></div>`))}
+    ${x.bus_only?"":altBlock(x.out_options,"outbound")}
+    ${returnBlock}
     ${bagToggle}
     ${x.ground?(()=>{ const tk=x.bag_legs*ttl; return `<div class="bagopt" style="background:#f3faf4;border-color:#cdeccf"><span>Chișinău → ${x.ground.to} by ${x.ground.mode}: <b>${money(x.ground.price)} × ${tk} ticket${tk>1?"s":""} = ${money(x.ground.total)}</b>
        <span class="muted" style="font-weight:400">· ${x.bag_legs>1?"there &amp; back":"one-way"}${ttl>1?`, ${ttl} travelers`:""}, ~${x.ground.hours}h each way · <a href="${x.ground.book}" target="_blank">exact price &amp; book</a></span></span></div>`; })():""}
     ${x.agency?`<div class="bagopt" style="background:#f6f4fb;border-color:#ddd6ee"><span>Local agency: <b>zbor.md</b> sells ${x.agency.name} from <b>~${money(x.agency.price)}</b>
        <span class="muted" style="font-weight:400">· "from" teaser, not date-specific · <a href="${x.agency.link}" target="_blank">check &amp; book on zbor.md</a></span></span></div>`:""}
-    <div class="ftotal"><span class="lab">${noReturn?"Total (outbound only)":"Trip total"}</span><span class="amt">~${money(tot)}</span></div>
+    <div class="ftotal"><span class="lab">${x.one_way?"Total (outbound only)":"Trip total"}</span><span class="amt">~${money(tot)}</span></div>
     <details class="incl"><summary>What's included</summary>
       <div class="break">
-        <div class="row"><span class="muted">Flights, no bag${ttl>1?` (${ttl} travelers)`:""}</span><span>${money(x.flight_total)}</span></div>
+        <div class="row"><span class="muted">${x.bus_only?`Bus fare${x.one_way?" (one-way)":" (there &amp; back)"}`:`Flights, no bag`}${ttl>1?` (${ttl} travelers)`:""}</span><span>${money(x.flight_total)}</span></div>
         ${bagInc?`<div class="row"><span class="muted">Checked bag (${x.bag_airline} est.)</span><span>${money(bag)}</span></div>`:""}
         ${x.ground?`<div class="row"><span class="muted">Chișinău → ${x.ground.to} (${x.ground.mode})</span><span>${money(x.ground.total)}</span></div>`:""}
         ${busBackOf(x)?`<div class="row"><span class="muted">Return by bus (FlixBus${x.travelers>1?`, ${x.travelers} travelers`:""})</span><span>${money(busBackOf(x))}</span></div>`:""}
@@ -661,13 +712,28 @@ function renderResults(){
     window._huntPre = pre;  // metric change re-prefills with that part's current price
   }
 
-  // flights first (the main thing), cheapest trip on top
+  // way there/back, cheapest trip on top (a pure-bus trip rides in here as a card too)
   const cards = [...d.results].sort((a,b)=>(a.error?Infinity:tripTotal(a))-(b.error?Infinity:tripTotal(b)));
-  html += `<div class="sect-title">Flights · cheapest first</div>` + cards.map(flightCard).join("");
+  const hasBusCard = d.results.some(r=>r.bus_only);
+  if(d.no_trip && !cards.some(r=>!r.error)){
+    const om=d.out_mode, bm=d.back_mode;
+    const why = (om==="bus"&&bm==="plane")
+      ? `“Bus there + fly back” isn't offered. Set the return to <b>Bus</b> or <b>Both</b>, or fly out too.`
+      : (om==="plane"&&bm==="plane")
+        ? `No return <b>flight</b> from ${d.label} in these dates. Allow <b>Bus</b> or <b>Both</b> for the return, or widen your dates.`
+        : `No way to get there and back from ${d.label} with these options in these dates. Try <b>Both</b> for each direction, or widen your dates.`;
+    html += `<div class="note" style="background:#fdecec;border-color:#f3c0c0;color:#b42318">
+      <b>Nothing to show —</b> ${why}</div>`;
+  }
+  const secTitle = hasBusCard && cards.filter(r=>!r.error).length>1 ? "Getting there · cheapest first"
+    : hasBusCard && !cards.some(r=>!r.error&&!r.bus_only) ? "By bus"
+    : "Flights · cheapest first";
+  if(cards.some(r=>!r.error)||cards.length)
+    html += `<div class="sect-title">${secTitle}</div>` + cards.map(flightCard).join("");
 
-  // direct long-distance bus Chisinau <-> destination (toggleable; the short
-  // MD->RO airport-feeder rides above don't count as these)
-  if(d.bus){
+  // direct long-distance bus Chisinau <-> destination (only as a separate note when
+  // it isn't already shown as its own trip card above; toggleable)
+  if(d.bus && !d.bus_card){
     html += `<label class="bagopt" style="margin-top:4px"><input type="checkbox" id="buschk" ${BUS_SHOW?"checked":""}>
       <span>Show direct bus rides Chișinău ↔ ${d.label}</span></label>`;
     if(BUS_SHOW){
@@ -857,8 +923,13 @@ async function doCompare(){
      <tr class="cmp-det" id="cmprow-${i}" style="display:none"><td colspan="6" style="background:#f8fafc;padding:6px 12px 16px">
        <div class="muted" style="font-size:12px;margin:2px 0 8px">Full detail — every airport, live fares, all Airbnb stays, buses</div>
        <div id="cmpd-${i}"></div></td></tr>`).join("");
+  const kindTxt = d.one_way ? "one-way flights" : "round-trip flights";
+  const modeNote = d.flights_only
+    ? `<div class="note" style="margin:2px 0 14px">Compare-all ranks by ${kindTxt} (checking buses for every city would be too slow). Bus / mixed options still appear when you <b>open a place</b>.${d.one_way?"":" Places with no return flight are hidden."}</div>`
+    : (d.one_way ? "" : `<div class="note" style="margin:2px 0 14px">Return trips only: any destination with no return flight in these dates is hidden.</div>`);
   $("results").innerHTML = `<h2 class="q">Cheapest destinations</h2>
-     <p class="lead">Full trip price — round-trip flights + a live place-to-stay + extras — ranked cheapest first. <b>Tap any destination</b> to open every flight, all Airbnb options and the full cost breakdown. The bell adds a city to your Telegram price hunt.</p>
+     <p class="lead">Full trip price — ${kindTxt} + a live place-to-stay + extras — ranked cheapest first. <b>Tap any destination</b> to open every flight, all Airbnb options and the full cost breakdown. The bell adds a city to your Telegram price hunt.</p>
+     ${modeNote}
      <div class="card pad"><table><thead><tr><th>#</th><th>Destination</th><th>From</th><th>Dates</th><th style="text-align:right">Trip total</th><th></th></tr></thead>
      <tbody>${rows||`<tr><td colspan="6" class="muted">No results.</td></tr>`}</tbody></table></div>`;
   $("results").querySelectorAll("tr.cmp-sum").forEach(tr=>tr.onclick=()=>toggleCompareRow(+tr.dataset.i, tr.dataset.city));

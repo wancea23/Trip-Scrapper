@@ -37,8 +37,11 @@ git branch -M main && git push -u origin main
    - **Build command:** `pip install -r requirements.txt`
    - **Start command:** `python web.py`
    - **Instance type:** Free
-4. Under **Environment**, add a variable:
-   - `TRAVELPAYOUTS_TOKEN` = your token (the one from config.json)
+4. Under **Environment**, add these variables:
+   - `TRAVELPAYOUTS_TOKEN` = your token (the one from config.json / token.txt)
+   - `TELEGRAM_BOT_TOKEN` = the token from your local **`tg_token.txt`** — **required for the
+     Telegram bot to work on the live site.** `tg_token.txt` is gitignored, so it is NOT
+     deployed; without this env var the bot is silently OFF on the host.
 5. Click **Create Web Service**.
 
 (There's a `render.yaml` in the repo, so you can also use Render's **Blueprint** flow, which fills
@@ -58,13 +61,24 @@ railway login            # opens browser once
 railway init             # name the project
 railway up               # uploads THIS folder and builds it
 railway variables set TRAVELPAYOUTS_TOKEN=<your-token>
+railway variables set TELEGRAM_BOT_TOKEN=<your-bot-token>   # from tg_token.txt (bot on the live site)
 railway domain           # gives you a public https URL
 ```
 
 Railway auto-detects Python from `requirements.txt` + `Procfile`. That's the whole deploy.
 
+## Telegram bot on the live site
+- Set **`TELEGRAM_BOT_TOKEN`** (same value as your local `tg_token.txt`) in the host's env vars.
+  Without it the bot is OFF on the host — that's the usual "the bot doesn't work when deployed".
+- The app **keeps itself awake** by pinging its own URL every 10 min (`RENDER_EXTERNAL_URL` /
+  `RAILWAY_PUBLIC_DOMAIN`, or set `PUBLIC_URL`), so the polling bot keeps replying and sending
+  price-drop alerts instead of dying on the free tier's 15-min sleep.
+- Run the bot in **only one place at a time** (either the live host OR your PC, not both) — Telegram
+  lets a single poller consume updates; two at once conflict and neither works reliably.
+
 ## Things to know about the free tier
-- **It sleeps after ~15 min idle** → the first visit after a nap takes ~50s to wake up. Normal.
+- **It sleeps after ~15 min idle** → the first visit after a nap takes ~50s to wake up. The built-in
+  keep-alive ping mitigates this so the bot stays live; a small always-on host is still more reliable.
 - **The price-history database resets on each redeploy** (ephemeral disk). The live search/compare
   don't need it; only the long-term `--history` watcher does.
 - **Airbnb scraping from a cloud IP may occasionally be blocked/rate-limited.** Flights always work;

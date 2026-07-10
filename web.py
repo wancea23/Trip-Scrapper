@@ -13,6 +13,8 @@ calls the command-line tool already makes. Press Ctrl+C in the terminal to stop 
 import json
 import os
 import threading
+import time
+import urllib.request
 import webbrowser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -116,66 +118,231 @@ def _one(origin, dest_iata, c, include_real=True):
     }
 
 
+# --------------------------------------------------------------------------- #
+#  Transport modes: fly / bus / both, per direction. The '100% a way home' rule.
+# --------------------------------------------------------------------------- #
+def _modes(val):
+    """Parse a transport-mode choice into the set of allowed carriers.
+    'plane'/'flight' -> flights only; 'bus' -> bus only; anything else
+    ('both'/'mixed'/'either'/empty) -> both. Empty defaults to both, which keeps
+    the pre-modes behaviour: show flights and fall back to the bus."""
+    v = str(val or "").strip().lower()
+    if v in ("plane", "flight", "flights", "air", "fly"):
+        return {"plane"}
+    if v in ("bus", "coach", "flixbus"):
+        return {"bus"}
+    return {"plane", "bus"}
+
+
+def _mode_name(modes):
+    if modes == {"plane"}:
+        return "plane"
+    if modes == {"bus"}:
+        return "bus"
+    return "both"
+
+
+def _apply_modes(r, bus, one_way, out_modes, back_modes, dest_iata):
+    """Filter + re-price ONE flight card for the chosen transport modes.
+    Returns the (mutated) card, or None if it should be HIDDEN.
+
+    A flight card always flies the OUTBOUND, so it needs 'plane' in out_modes.
+    On a return trip it must also have an acceptable RETURN - a return flight
+    (plane) or, failing that, the direct bus home (bus) - otherwise it's hidden.
+    That is the '100% needs a way back' rule. Fares/bag/ground/booking link are
+    recomputed for the legs actually travelled, so a bus-return card isn't billed
+    a phantom return flight."""
+    tv = r["travelers"]
+    out, back = r["out"], r["back"]
+    if "plane" not in out_modes:
+        return None  # user isn't flying out -> this flight card doesn't apply
+
+    def bag_for(legs):
+        pp = sum(ts.airline_bag_leg(l["airline"]) for l in legs)
+        names = []
+        for l in legs:
+            nm = ts.airline_name(l["airline"])
+            if nm not in names:
+                names.append(nm)
+        return round(pp * tv, 2), " + ".join(names)
+
+    if one_way:
+        r["return_mode"] = None
+        r["flight_total"] = round(out["price"] * tv, 2)
+        r["bag_total"], r["bag_airline"] = bag_for([out])
+        r["bag_legs"] = 1
+        r["bus_back"] = 0
+        r["booking_link"] = ts.aviasales_link(r["origin"], dest_iata, out["date"], None, tv)
+    else:
+        back_plane = ("plane" in back_modes) and (back is not None)
+        back_bus = ("bus" in back_modes) and bool(bus and bus.get("back"))
+        if not (back_plane or back_bus):
+            return None  # no acceptable way home -> hide this destination
+        if back_plane:  # a real return flight beats the long bus when both are allowed
+            r["return_mode"] = "flight"
+            r["flight_total"] = round((out["price"] + back["price"]) * tv, 2)
+            r["bag_total"], r["bag_airline"] = bag_for([out, back])
+            r["bag_legs"] = 2
+            r["bus_back"] = 0
+            r["booking_link"] = ts.aviasales_link(r["origin"], dest_iata, out["date"], back["date"], tv)
+        else:  # ride home by the direct bus
+            r["return_mode"] = "bus"
+            r["flight_total"] = round(out["price"] * tv, 2)
+            r["bag_total"], r["bag_airline"] = bag_for([out])
+            r["bag_legs"] = 1
+            r["bus_back"] = round(bus["back"]["price"] * tv, 2)
+            r["booking_link"] = ts.aviasales_link(r["origin"], dest_iata, out["date"], None, tv)
+            # keep the flight-derived trip length: the destination bus is one shared
+            # quote (priced on the cheapest card's dates), so its dep date can't be
+            # pinned to THIS card's outbound without going negative on later departures
+    # ground transport home->airport scales with the flight legs actually flown
+    r["ground"] = _ground(r["origin"], out["date"], tv, r["bag_legs"])
+    return r
+
+
+def _bus_card(bus, label, one_way, travelers, nights, extras_def, out_date, back_date):
+    """Shape the direct Chisinau<->destination bus as a normal result card, so the
+    front end ranks and totals it exactly like a flight (transport in flight_total)."""
+    def leg(q, frm, to):
+        return {"price": q["price"], "date": (q.get("dep") or "")[:10] or out_date,
+                "airline": "FlixBus", "transfers": 0, "duration": 0,
+                "route": [frm, to], "stops": [], "link": q.get("book"),
+                "source": "FlixBus", "dep": q.get("dep")}
+    out_leg = leg(bus["out"], "Chisinau", label)
+    back_leg = leg(bus["back"], label, "Chisinau") if (not one_way and bus.get("back")) else None
+    if back_leg and not back_leg["date"]:
+        back_leg["date"] = back_date
+    transport = round((bus["out"]["price"] + (back_leg["price"] if back_leg else 0)) * travelers, 2)
+    items, etot = ts.compute_extras(extras_def, travelers, nights)
+    return {
+        "origin": "BUS", "name": "Direct bus", "bus_only": True,
+        "out": out_leg, "back": back_leg,
+        "out_options": [out_leg], "back_options": [back_leg] if back_leg else [],
+        "flight_total": transport, "travelers": travelers,
+        "actual_nights": None if one_way else nights,
+        "one_way": one_way, "return_mode": None if one_way else "bus",
+        "booking_link": bus["out"].get("book"),
+        "bag_total": 0, "bag_airline": "", "bag_legs": 0,
+        "ground": None, "agency": None, "bus_back": 0,
+        "extras": items, "extras_total": etot,
+        "out_date": out_leg["date"] or None,
+        "back_date": back_leg["date"] if back_leg else None,
+    }
+
+
+def _pick_flight(iata, c, origins, one_way, out_modes, back_modes, bus, include_real=False):
+    """Cheapest VALID flight card across origins for one destination, honouring the
+    modes + the '100% a way home' rule. Returns a re-priced card or None."""
+    if "plane" not in out_modes:
+        return None
+    best = None
+    for origin in origins:
+        r = _one(origin, iata, c, include_real=include_real)
+        if "flight_total" not in r:
+            continue
+        kept = _apply_modes(r, bus, one_way, out_modes, back_modes, iata)
+        if kept is None:
+            continue
+        eff = kept["flight_total"] + (kept.get("bus_back") or 0)
+        if best is None or eff < best[0]:
+            best = (eff, kept)
+    return best[1] if best else None
+
+
 def do_search(body):
     cities = _cities()
     c = _cfg_for(body)
     dest_iata, hotel_loc, label = ts.resolve_destination(body["destination"], cities)
     origins = body.get("origins") or c["origins"]
-    results = [_one(o, dest_iata, c) for o in origins]
-
-    # itemise extra costs (transfer, tax, bus...) per result, scaled by travelers/nights
+    one_way = c["trip"]["type"] == "oneway"
+    out_modes = _modes(body.get("out_mode"))
+    back_modes = _modes(body.get("back_mode"))
     extras_def = body.get("extras") or c.get("extras", [])
     travelers = c["trip"].get("travelers", 1)
     nmin = ts.nights_bounds(c["trip"])[0]
-    for r in results:
+    with_stay = body.get("with_stay", True)
+
+    raw = [_one(o, dest_iata, c) for o in origins]
+
+    # itemise extra costs (transfer, tax...) per result, scaled by travelers/nights
+    for r in raw:
         if "flight_total" in r:
             items, etot = ts.compute_extras(extras_def, travelers, r.get("actual_nights") or nmin)
             r["extras"], r["extras_total"] = items, etot
 
-    # each origin's cheapest flight can land on completely different dates, so a
-    # single stay can't serve every card - fetch one stay PER date window (cached,
-    # so origins sharing dates cost one Airbnb scrape) and attach it to its flight
-    stay, stay_dates, bus = None, None, None
-    flying = [r for r in results if "flight_total" in r]
-    with_stay = body.get("with_stay", True)
-    if flying:
-        stay_cache = {}
-        for r in flying:
-            nights = r["actual_nights"] or nmin
-            check_in = r["out_date"]
-            check_out = (datetime.strptime(check_in, "%Y-%m-%d")
-                         + timedelta(days=nights)).strftime("%Y-%m-%d")
-            r["stay_dates"] = {"check_in": check_in, "check_out": check_out,
-                               "nights": nights}
-            r["stay"] = None
-            if with_stay:
-                key = (check_in, nights)
-                if key not in stay_cache:
-                    try:
-                        stay_cache[key] = ts.fetch_stay(hotel_loc, check_in, nights, c)
-                    except Exception:
-                        stay_cache[key] = None
-                r["stay"] = stay_cache[key]
+    # direct bus Chisinau <-> destination, needed BOTH to price a bus outbound/return
+    # and to decide whether a place has any way back at all. Fetch it once, on the
+    # cheapest flight's dates (or the search window when nothing flies).
+    flying_raw = [r for r in raw if "flight_total" in r]
+    if flying_raw:
+        ref = min(flying_raw, key=lambda r: r["flight_total"])
+        ref_out, ref_nights = ref["out_date"], (ref.get("actual_nights") or nmin)
+    else:
+        ref_out, ref_nights = c["trip"]["depart_from"], nmin
+    ref_back = (datetime.strptime(ref_out, "%Y-%m-%d")
+                + timedelta(days=ref_nights)).strftime("%Y-%m-%d")
+    try:
+        bus = ts.sources.bus_home_options(hotel_loc, ref_out, None if one_way else ref_back)
+    except Exception:
+        bus = None
 
-        # headline stay + bus belong to the trip the UI ranks first: the cheapest
-        # FULL trip (flights + ground + stay + extras), not the cheapest bare fare
-        def full_total(r):
-            st = r["stay"]["stay_total"] if r.get("stay") else 0
-            ground = r["ground"]["total"] if r.get("ground") else 0
-            return r["flight_total"] + ground + st + r.get("extras_total", 0)
+    # apply the transport-mode filter + re-pricing to every flight card
+    results = []
+    for r in raw:
+        if "error" in r:
+            if "plane" in out_modes:  # a failed flight lookup is only worth showing
+                results.append(r)     # when the user actually wants to fly out
+            continue
+        kept = _apply_modes(r, bus, one_way, out_modes, back_modes, dest_iata)
+        if kept is not None:
+            results.append(kept)
 
-        best = min(flying, key=full_total)
-        stay, stay_dates = best["stay"], best["stay_dates"]
-        # direct long-distance bus Chisinau <-> destination (real FlixBus quotes),
-        # both a flight alternative and the return fix when no return flight exists
-        try:
-            bus = ts.sources.bus_home_options(hotel_loc, best["out_date"],
-                                              best["stay_dates"]["check_out"])
-        except Exception:
-            bus = None
+    # a pure-bus journey (bus there, bus back) as its own card, when the user allows
+    # the bus for the outbound (and, on a return trip, for the way home)
+    bus_out_ok = bool(bus and bus.get("out")) and ("bus" in out_modes)
+    bus_back_ok = one_way or (bool(bus and bus.get("back")) and ("bus" in back_modes))
+    bus_card_added = False
+    if bus_out_ok and bus_back_ok:
+        results.append(_bus_card(bus, label, one_way, travelers, ref_nights,
+                                 extras_def, ref_out, ref_back))
+        bus_card_added = True
+
+    # stays: one live Airbnb scrape per DATE WINDOW, shared across cards that share it
+    stay, stay_dates, stay_cache = None, None, {}
+    for r in results:
+        if not r.get("out_date"):
+            continue
+        nights = r.get("actual_nights") or nmin
+        check_in = r["out_date"]
+        check_out = (datetime.strptime(check_in, "%Y-%m-%d")
+                     + timedelta(days=nights)).strftime("%Y-%m-%d")
+        r["stay_dates"] = {"check_in": check_in, "check_out": check_out, "nights": nights}
+        r["stay"] = None
+        if with_stay:
+            key = (check_in, nights)
+            if key not in stay_cache:
+                try:
+                    stay_cache[key] = ts.fetch_stay(hotel_loc, check_in, nights, c)
+                except Exception:
+                    stay_cache[key] = None
+            r["stay"] = stay_cache[key]
+
+    # headline stay = the cheapest FULL trip's stay (flights + ground + bus + stay + extras)
+    def full_total(r):
+        st = r["stay"]["stay_total"] if r.get("stay") else 0
+        ground = r["ground"]["total"] if r.get("ground") else 0
+        return r["flight_total"] + ground + st + (r.get("bus_back") or 0) + r.get("extras_total", 0)
+
+    priced = [r for r in results if "flight_total" in r]
+    if priced:
+        best = min(priced, key=full_total)
+        stay, stay_dates = best.get("stay"), best.get("stay_dates")
+
     return {"label": label, "currency": c["currency"].upper(),
             "results": results, "stay": stay, "stay_dates": stay_dates, "bus": bus,
-            "have_key": ts.stays.have_key(c)}
+            "bus_card": bus_card_added, "one_way": one_way,
+            "out_mode": _mode_name(out_modes), "back_mode": _mode_name(back_modes),
+            "no_trip": len(priced) == 0, "have_key": ts.stays.have_key(c)}
 
 
 def do_multi(body):
@@ -206,41 +373,72 @@ def do_multi(body):
     nmin = ts.nights_bounds(c["trip"])[0]
     extras_def = body.get("extras") or c.get("extras", [])
     include_bag = bool(body.get("include_bag"))  # bag is opt-in, like the UI checkbox
+    one_way = c["trip"]["type"] == "oneway"
+    out_modes = _modes(body.get("out_mode"))
+    back_modes = _modes(body.get("back_mode"))
+    # the bus is only needed when a direction can use it - skip the FlixBus calls
+    # for a plain fly-there/fly-back selection
+    need_bus = ("bus" in out_modes) or (not one_way and "bus" in back_modes)
+    back_est = (datetime.strptime(c["trip"]["depart_from"], "%Y-%m-%d")
+                + timedelta(days=nmin)).strftime("%Y-%m-%d")
     rows = []
     for name, info in targets.items():
-        best = None
-        for origin in origins:
-            r = _one(origin, info["airport"], c, include_real=False)
-            if "flight_total" in r and (best is None or r["flight_total"] < best["flight_total"]):
-                best = r
-        if not best:
+        loc = info.get("hotel_location", name)
+        city_bus = None
+        if need_bus:
+            try:
+                city_bus = ts.sources.bus_home_options(
+                    loc, c["trip"]["depart_from"], None if one_way else back_est)
+            except Exception:
+                city_bus = None
+        # cheapest VALID flight trip (honours modes + the way-home rule); the direct
+        # bus only stands in for the whole trip when the user won't fly out
+        best = _pick_flight(info["airport"], c, origins, one_way, out_modes,
+                            back_modes, city_bus, include_real=False) if "plane" in out_modes else None
+        if best is None and "bus" in out_modes and city_bus and city_bus.get("out") \
+                and (one_way or city_bus.get("back")):
+            best = _bus_card(city_bus, name, one_way, travelers, nmin, extras_def,
+                             c["trip"]["depart_from"], back_est)
+        if best is None:
             rows.append({"total": None, "flights": None, "city": name,
                          "country": info.get("country", "?")})
             continue
-        # the WHOLE price, same math as the single-city page: flights + bag +
-        # ground + stay (live Airbnb, matched to this city's flight dates) + extras
+        # the WHOLE price, same math as the single-city page: flights/bus + bag +
+        # ground + stay (live Airbnb, matched to this trip's dates) + extras
         nights = best["actual_nights"] or nmin
         stay = None
         if body.get("with_stay", True):
             try:
-                stay = ts.fetch_stay(info.get("hotel_location", name), best["out_date"], nights, c)
+                stay = ts.fetch_stay(loc, best["out_date"], nights, c)
             except Exception:
                 stay = None
         stay_total = stay["stay_total"] if stay else 0
         ground = best["ground"]["total"] if best.get("ground") else 0
         extras_total = ts.compute_extras(extras_def, travelers, nights)[1]
         grand = round(best["flight_total"] + (best["bag_total"] if include_bag else 0)
-                      + ground + stay_total + extras_total, 2)
+                      + ground + (best.get("bus_back") or 0) + stay_total + extras_total, 2)
+        # show the way home honestly: the return-flight date only when we're actually
+        # flying back; a bus return (or the pure-bus card) shows its own bus date / none
+        if best.get("bus_only"):
+            back_date = best["back"]["date"] if best.get("back") else None
+        elif best.get("return_mode") == "bus":
+            back_date = None
+        else:
+            back_date = best["back"]["date"] if best.get("back") else None
         rows.append({"total": grand, "flights": best["flight_total"],
                      "bag": best["bag_total"], "ground": ground,
+                     "bus_back": best.get("bus_back") or 0,
+                     "return_mode": best.get("return_mode"),
                      "stay": stay_total, "stay_name": stay["name"] if stay else None,
                      "extras": extras_total, "city": name,
                      "country": info.get("country", "?"), "origin": best["origin"],
                      "name": best["name"], "out": best["out"]["date"],
-                     "back": best["back"]["date"] if best["back"] else None,
+                     "back": back_date,
                      "nights": best["actual_nights"], "link": best["booking_link"]})
     rows.sort(key=lambda x: x["total"] if x["total"] is not None else float("inf"))
-    return {"currency": c["currency"].upper(), "rows": rows, "unknown": unknown}
+    return {"currency": c["currency"].upper(), "rows": rows, "unknown": unknown,
+            "one_way": one_way, "out_mode": _mode_name(out_modes),
+            "back_mode": _mode_name(back_modes)}
 
 
 def do_compare(body):
@@ -252,6 +450,11 @@ def do_compare(body):
     extras_def = body.get("extras") or c.get("extras", [])
     include_bag = bool(body.get("include_bag"))  # bag is opt-in, like the UI checkbox
     with_stay = body.get("with_stay", True)
+    # ranking every city by bus would mean FlixBus calls x129 cities - too slow and
+    # ban-prone. So compare-all ranks round-trip FLIGHTS only, but still enforces the
+    # way-home rule: in return mode a city with no return flight is dropped. Bus /
+    # mixed options still show when you open a place (that runs the full do_search).
+    one_way = c["trip"]["type"] == "oneway"
     stay_cache = {}   # hotel_location -> stay dict; scrape live Airbnb once per city
     label_cache = {}  # city name -> display label (e.g. "Bucharest (OTP)")
     rows = []
@@ -263,6 +466,10 @@ def do_compare(body):
             # and likely get the server's IP blocked
             r = _one(origin, info["airport"], c, include_real=False)
             if "flight_total" not in r:
+                continue
+            # way-home rule: no bus here (too many cities), so a return trip needs a
+            # real return flight or it's dropped
+            if _apply_modes(r, None, one_way, {"plane"}, {"plane"}, info["airport"]) is None:
                 continue
             nights = r["actual_nights"] or nmin
             # full trip = flights + (optional bag) + ground transport + stay + extras,
@@ -308,7 +515,11 @@ def do_compare(body):
                          "back": r["back"]["date"] if r["back"] else None,
                          "nights": r["actual_nights"], "detail": detail})
     rows.sort(key=lambda x: x["total"])
-    return {"currency": c["currency"].upper(), "rows": rows}
+    out_mode = _mode_name(_modes(body.get("out_mode")))
+    back_mode = _mode_name(_modes(body.get("back_mode")))
+    return {"currency": c["currency"].upper(), "rows": rows, "one_way": one_way,
+            "out_mode": out_mode, "back_mode": back_mode,
+            "flights_only": (out_mode != "plane" or back_mode != "plane")}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -364,6 +575,37 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
 
+def _public_url():
+    """The app's own public URL on a cloud host, if we can find it. Render exposes
+    RENDER_EXTERNAL_URL; Railway exposes RAILWAY_PUBLIC_DOMAIN; PUBLIC_URL overrides."""
+    url = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+    if not url:
+        dom = os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL")
+        if dom:
+            url = dom if dom.startswith("http") else "https://" + dom
+    return (url or "").rstrip("/")
+
+
+def _keep_awake():
+    """Free hosts (Render/Railway) sleep after ~15 min idle, which stops the Telegram
+    bot from polling and sending price-drop alerts. Ping our own public URL every 10
+    min so the dyno stays awake. No-op when we don't know a public URL (e.g. local)."""
+    url = _public_url()
+    if not url:
+        return
+
+    def loop():
+        while True:
+            time.sleep(600)
+            try:
+                urllib.request.urlopen(url + "/api/cities", timeout=20).read(64)
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, daemon=True).start()
+    print(f"Keep-alive: pinging {url} every 10 min so the free host doesn't sleep (bot stays live)")
+
+
 def main():
     if ts.resolve_token(CFG).startswith("PUT_YOUR") and not os.environ.get("TRAVELPAYOUTS_TOKEN"):
         print("!! No API token (config.json or TRAVELPAYOUTS_TOKEN env) - searches will fail.")
@@ -373,7 +615,12 @@ def main():
     port = int(os.environ.get("PORT", PORT))
     host = "0.0.0.0" if cloud else "127.0.0.1"
     print(f"Trip Finder UI running on {host}:{port}")
-    tgbot.start_in_background(CFG)  # no-op until a bot token is configured
+    started = tgbot.start_in_background(CFG)  # no-op until a bot token is configured
+    if cloud and not started:
+        print("!! Telegram bot OFF on this host: no token. Set TELEGRAM_BOT_TOKEN in the "
+              "host's Environment tab (see DEPLOY.md), then redeploy.")
+    if cloud:
+        _keep_awake()  # keep the free dyno (and the bot) alive between visits
     if not cloud:
         threading.Timer(0.6, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
         print("Opening your browser... (press Ctrl+C here to stop)")

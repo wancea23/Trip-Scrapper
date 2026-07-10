@@ -6,9 +6,13 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python web.py
     envVars:
-      # Set your Travelpayouts token in the Render dashboard (Environment tab).
-      # Leave it as a dashboard secret instead of committing it to the repo.
+      # Set these in the Render dashboard (Environment tab) - keep secrets OUT of the repo.
       - key: TRAVELPAYOUTS_TOKEN
+        sync: false
+      # Telegram price-hunt bot. Without this the bot is OFF on the host (tg_token.txt
+      # is gitignored, so it isn't deployed). Paste the SAME token from your local
+      # tg_token.txt here so the bot replies + sends alerts on the live site.
+      - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: PYTHON_VERSION
         value: "3.12.6"
