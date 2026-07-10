@@ -346,6 +346,29 @@ def do_search(body):
             "no_trip": len(priced) == 0, "have_key": ts.stays.have_key(c)}
 
 
+def do_stay(body):
+    """Re-fetch the cheapest stays for one destination on a specific check-in +
+    nights. Used when the user picks a different flight option (a later return =
+    more nights) so the places-to-stay list below updates to the new dates."""
+    cities = _cities()
+    c = _cfg_for(body)
+    dest_iata, hotel_loc, label = ts.resolve_destination(body["destination"], cities)
+    check_in = body.get("check_in")
+    try:
+        datetime.strptime(check_in, "%Y-%m-%d")
+        nights = max(1, int(body.get("nights") or 1))
+    except (TypeError, ValueError):
+        raise ValueError("bad check-in date or nights")
+    try:
+        stay = ts.fetch_stay(hotel_loc, check_in, nights, c)
+    except Exception:
+        stay = None
+    check_out = (datetime.strptime(check_in, "%Y-%m-%d")
+                 + timedelta(days=nights)).strftime("%Y-%m-%d")
+    return {"stay": stay,
+            "stay_dates": {"check_in": check_in, "check_out": check_out, "nights": nights}}
+
+
 def do_multi(body):
     """Compare only the places the user selected (cities and/or whole countries):
     cheapest round-trip flights per city across the chosen origins, so the front
@@ -382,6 +405,12 @@ def do_multi(body):
     need_bus = ("bus" in out_modes) or (not one_way and "bus" in back_modes)
     back_est = (datetime.strptime(c["trip"]["depart_from"], "%Y-%m-%d")
                 + timedelta(days=nmin)).strftime("%Y-%m-%d")
+    # LIVE airline fares for a small selection so the ranking is ACCURATE up front
+    # (cached fares read stale, then the drill-down "corrected" the price = confusing).
+    # A big selection (e.g. several whole countries) stays on cached to stay fast and
+    # polite to the airline sites; the drill-down reuses whatever we computed here, so
+    # the numbers always match either way.
+    include_real = len(targets) <= 8
     rows = []
     for name, info in targets.items():
         loc = info.get("hotel_location", name)
@@ -395,7 +424,7 @@ def do_multi(body):
         # cheapest VALID flight trip (honours modes + the way-home rule); the direct
         # bus only stands in for the whole trip when the user won't fly out
         best = _pick_flight(info["airport"], c, origins, one_way, out_modes,
-                            back_modes, city_bus, include_real=False) if "plane" in out_modes else None
+                            back_modes, city_bus, include_real=include_real) if "plane" in out_modes else None
         if best is None and "bus" in out_modes and city_bus and city_bus.get("out") \
                 and (one_way or city_bus.get("back")):
             best = _bus_card(city_bus, name, one_way, travelers, nmin, extras_def,
@@ -578,6 +607,8 @@ class Handler(BaseHTTPRequestHandler):
             bid = body.get("browser_id")  # the caller's browser identity (see do_GET)
             if self.path == "/api/search":
                 self._send(200, do_search(body))
+            elif self.path == "/api/stay":
+                self._send(200, do_stay(body))
             elif self.path == "/api/compare":
                 self._send(200, do_compare(body))
             elif self.path == "/api/multi":

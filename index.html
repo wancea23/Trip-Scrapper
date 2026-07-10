@@ -142,6 +142,9 @@
   details.more summary::-webkit-details-marker{display:none}
   .alt{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--sub);
        padding:7px 0 7px 12px;border-left:2px solid var(--line);margin:6px 0}
+  .alt.pick{cursor:pointer;border-radius:0 8px 8px 0;padding-right:10px;transition:.12s}
+  .alt.pick:hover{background:var(--accent-soft);border-left-color:var(--accent);color:var(--ink)}
+  .alt.pick.on{border-left-color:var(--ok);background:#f1faf5;color:var(--ink);font-weight:500}
 
   .bagopt{display:flex;align-items:flex-start;gap:9px;margin:12px 0 0;font-size:14px;font-weight:500;cursor:pointer;
        background:var(--accent-soft);border:1px solid #d6e2ff;border-radius:11px;padding:11px 13px;line-height:1.45}
@@ -305,17 +308,8 @@
     </div>
   </section>
 
-  <!-- STEP 3 : extras -->
+  <!-- STEP 3 : results -->
   <section class="step" data-s="3">
-    <h2 class="q">Extra costs</h2>
-    <p class="lead">Edit to match your trip. Set anything to 0 to leave it out. Added to your total.</p>
-    <div class="note">Baggage is your own estimate, not from the airline. The real baggage-inclusive
-      price shows on the booking page. Set "Checked bag" to match your airline, or 0 for cabin-only.</div>
-    <div class="card pad" id="extrasbox"></div>
-  </section>
-
-  <!-- STEP 4 : results -->
-  <section class="step" data-s="4">
     <div id="results"></div>
   </section>
 
@@ -350,7 +344,7 @@ function bid(){ let v=localStorage.getItem("tf_bid");
   return v; }
 let CUR="EUR", COUNTRIES=[], ORIGINS=[], EXTRAS=[], SEL=null, STEP=1, MODE="plan";
 let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=false, STAY_ALL=false, BUS_SHOW=true;
-const STEPS=["Destination","Details","Extra costs","Your trip"];
+const STEPS=["Destination","Details","Your trip"];
 
 /* ---------- helpers ---------- */
 function money(n){ return (Math.round(n*100)/100) + " " + CUR; }
@@ -397,7 +391,7 @@ async function boot(){
     $("triptype").querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); updateModeUI(); });
   ["outmode","backmode"].forEach(id=>$(id).querySelectorAll("button").forEach(b=>b.onclick=()=>{
     $(id).querySelectorAll("button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); updateModeUI(); }));
-  renderExtras(); renderStepper(); goStep(1); updateModeUI(); setTimeout(initMap, 30);
+  renderStepper(); goStep(1); updateModeUI(); setTimeout(initMap, 30);
 }
 
 /* transport mode pickers (plane / bus / both, per direction) */
@@ -437,7 +431,7 @@ function renderStepper(){
 }
 
 function goStep(n){
-  STEP=n; if(n===4 && MODE!=="compare" && MODE!=="multi") MODE="plan";
+  STEP=n; if(n===3 && MODE!=="compare" && MODE!=="multi") MODE="plan";
   document.querySelectorAll(".step").forEach(s=>s.classList.toggle("active", +s.dataset.s===n));
   renderStepper(); renderNav(); renderHuntBar();
   if(n===2) $("d2sum").innerHTML = MODE==="compare"
@@ -458,21 +452,22 @@ function renderNav(){
     const nb=$("nextBtn"); if(nb) nb.onclick=proceedSelection;
     return;
   }
-  if(STEP===4){
+  if(STEP===3){
     nav.innerHTML = `<button class="btn ghost" onclick="goStep(1)">Start over</button>
-       <div class="spacer"></div><button class="btn ghost" onclick="goStep(3)">Edit dates</button>`;
+       <div class="spacer"></div><button class="btn ghost" onclick="goStep(2)">Edit dates</button>`;
     return;
   }
-  const next = STEP===3 ? (MODE==="compare" ? "Compare all destinations"
+  // Details (step 2) is now the last input step -> its Next runs the search
+  const next = STEP===2 ? (MODE==="compare" ? "Compare all destinations"
       : (MODE==="multi" ? "Compare my selection" : "Find my trip")) : "Continue";
   nav.innerHTML = `<button class="btn ghost" onclick="goStep(${STEP-1})">Back</button>
      <div class="spacer"></div><button class="btn" id="nextBtn">${next} &rarr;</button>`;
   $("nextBtn").onclick = ()=>{
-    if(STEP===2 && !originsSel().length){ alert("Pick at least one airport to fly from."); return; }
-    if(STEP===3){
-      if(MODE==="compare"){ goStep(4); doCompare(); }
-      else if(MODE==="multi" && HUNTSEL.length){ goStep(4); doMulti(); }
-      else { MODE="plan"; goStep(4); doSearch(); }
+    if(STEP===2){
+      if(!originsSel().length){ alert("Pick at least one airport to fly from."); return; }
+      if(MODE==="compare"){ goStep(3); doCompare(); }
+      else if(MODE==="multi" && HUNTSEL.length){ goStep(3); doMulti(); }
+      else { MODE="plan"; goStep(3); doSearch(); }
     } else goStep(STEP+1);
   };
 }
@@ -576,15 +571,6 @@ function onFilter(q){
   box.querySelectorAll(".huntall").forEach(b=>b.onclick=()=>{ toggleHunt(b.dataset.country,"country"); onFilter(q); });
 }
 
-/* ---------- step 3 extras ---------- */
-function renderExtras(){
-  $("extrasbox").innerHTML = EXTRAS.map((e,i)=>`
-    <div class="exrow"><div class="meta"><span class="n">${e.name}</span>
-      <span class="p">${CUR} ${perLabel(e.per)}</span></div>
-      <input type="number" min="0" step="1" data-i="${i}" value="${e.amount}"></div>`).join("");
-  $("extrasbox").querySelectorAll("input").forEach(inp=>inp.oninput=()=>{ EXTRAS[+inp.dataset.i].amount=Number(inp.value)||0; });
-}
-
 /* ---------- request ---------- */
 function originsSel(){ return [...$("origins").querySelectorAll(".chip.on")].map(c=>c.dataset.o); }
 function tripType(){ return $("triptype").querySelector("button.on").dataset.v; }
@@ -627,10 +613,80 @@ function legRow(where, l, extra){
       <div class="det">${routeTxt(l)} · ${dur(l.duration)} · <span class="tag ${l.stops&&l.stops.length||l.transfers?'':'ok'}">${stopsTxt(l)}</span> · ${l.airline} · ${srcTag(l)}${extra||""}${view}</div></div>
       <div class="price">${money(l.price)}${pp}</div></div>`;
 }
-function altBlock(opts,label){
+function altBlock(opts,label){  // view-only list (bus itineraries)
   const more=(opts||[]).slice(1); if(!more.length) return "";
   return `<details class="more"><summary>Show ${more.length} more ${label} dates</summary>`+
     more.map(l=>`<div class="alt"><span>${l.date} · ${routeTxt(l)} · ${dur(l.duration)} · ${stopsTxt(l)}${l.link?` · <a href="${l.link}" target="_blank">view</a>`:""}</span><span>${money(l.price)}</span></div>`).join("")+`</details>`;
+}
+function nightsBetween(a,b){ return Math.round((new Date(b+"T00:00:00") - new Date(a+"T00:00:00"))/86400000); }
+function ddmm(d){ const p=(d||"").split("-"); return p.length===3 ? p[2]+p[1] : ""; }
+function avioLink(x){ // rebuild the Aviasales round-trip/one-way deep link for picked dates
+  const o=x.out, org=(o.route&&o.route[0])||x.origin, dst=(o.route&&o.route[o.route.length-1])||"";
+  const b=(!x.one_way && x.return_mode==="flight" && x.back)?x.back:null;
+  return `https://www.aviasales.com/search/${org}${ddmm(o.date)}${dst}${b?ddmm(b.date):""}${x.travelers||1}`;
+}
+
+// a selectable leg group: the active leg + a "pick a different date" list. Only for
+// flight legs (out_options / back_options); bus legs stay view-only (altBlock).
+function legGroup(x, kind){
+  const opts=(kind==="out"?x.out_options:x.back_options)||[];
+  const active=kind==="out"?x.out:x.back;
+  const where=kind==="out"?"Outbound":"Return";
+  const extra=(kind==="back"&&x.actual_nights)?" · "+x.actual_nights+" night"+(x.actual_nights>1?"s":""):"";
+  let html=legRow(where, active, extra);
+  const selectable = !x.bus_only && x.return_mode!=="bus";
+  if(!selectable) return html + altBlock(opts, where.toLowerCase());
+  if(opts.length<2) return html;
+  const lbl=kind==="out" ? "Pick a different departure date"
+                         : "Pick a different return date — changes nights & the stays below";
+  html+=`<details class="more"><summary>${lbl} · ${opts.length-1} more</summary>`+
+    opts.map((o,i)=>{
+      const on = o.date===active.date && o.price===active.price && routeTxt(o)===routeTxt(active);
+      const nts = kind==="back" ? nightsBetween(x.out.date,o.date) : null;
+      const view = o.link ? ` · <a href="${o.link}" target="_blank" onclick="event.stopPropagation()">view</a>` : "";
+      return `<div class="alt pick ${on?'on':''}" data-pick="${kind}" data-card="${x._id}" data-i="${i}">
+        <span>${on?"<b>current</b> · ":""}${o.date} · ${routeTxt(o)} · ${dur(o.duration)} · ${stopsTxt(o)}${nts!=null?" · "+nts+"n":""}${view}</span>
+        <span>${money(o.price)}</span></div>`;
+    }).join("")+`</details>`;
+  return html;
+}
+
+function pickLeg(x, kind, idx){
+  if(x.bus_only) return;
+  if(kind==="out"){ const o=x.out_options&&x.out_options[idx]; if(!o) return; x.out=o; x.out_date=o.date; }
+  else { if(x.return_mode!=="flight") return; const b=x.back_options&&x.back_options[idx]; if(!b) return; x.back=b; x.back_date=b.date; }
+  const t=x.travelers||1;
+  if(!x.one_way && x.return_mode==="flight" && x.back){
+    // if a later outbound overtook the chosen return, snap to the cheapest valid return after it
+    if(nightsBetween(x.out.date,x.back.date)<=0){
+      const later=(x.back_options||[]).filter(b=>nightsBetween(x.out.date,b.date)>0).sort((a,b)=>a.price-b.price);
+      if(later.length){ x.back=later[0]; x.back_date=x.back.date; }
+    }
+    x.actual_nights=nightsBetween(x.out.date,x.back.date);
+    x.flight_total=Math.round((x.out.price+x.back.price)*t*100)/100;
+  } else {
+    x.flight_total=Math.round(x.out.price*t*100)/100;
+    if(x.one_way) x.actual_nights=null;
+  }
+  x.booking_link=avioLink(x);
+  refetchCardStayAndRender(x);
+}
+
+async function refetchCardStayAndRender(x){
+  const nights = x.actual_nights || (x.stay_dates&&x.stay_dates.nights) || (+$("nmin").value||3);
+  const co=new Date(new Date(x.out_date+"T00:00:00").getTime()+nights*86400000).toISOString().slice(0,10);
+  x.stay_dates={check_in:x.out_date, check_out:co, nights};
+  x._stayLoading=true; SELSTAY=null;
+  renderResults();                 // show the new dates + a spinner where the stays are
+  try{
+    const j = await (await fetch("/api/stay",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body({destination:SEL, check_in:x.out_date, nights}))})).json();
+    x.stay = j.stay || null; if(j.stay_dates) x.stay_dates=j.stay_dates;
+  }catch(e){ x.stay=null; }
+  x._stayLoading=false;
+  renderResults();
+  const opts=stayOptions(); SELSTAY=opts.length?opts[0]:null;   // default-pick the new cheapest
+  renderResults();
 }
 
 function flightCard(x){
@@ -648,8 +704,7 @@ function flightCard(x){
   const bb = (LAST.bus && LAST.bus.back) || (x.bus_only ? x.back : null);
   const returnBlock = x.one_way ? ""
     : x.bus_only ? legRow("Return", x.back)
-    : x.return_mode==="flight"
-      ? legRow("Return", x.back, " · "+x.actual_nights+" nights")+altBlock(x.back_options,"return")
+    : x.return_mode==="flight" ? legGroup(x,"back")
     : retBus && bb ? `<div class="leg"><div><div class="wh">Return by direct bus${x.actual_nights?` · ~${x.actual_nights} nights`:""}</div>
             <div class="det">${LAST.label} → Chișinău · FlixBus · pick your date on FlixBus · <a href="${bb.book}" target="_blank">book</a>${LAST.bus&&LAST.bus.infobus_back?` · <a href="${LAST.bus.infobus_back}" target="_blank">more carriers</a>`:""}</div></div>
             <div class="price">${money(bb.price)}${ttl>1?'<span class="muted" style="font-weight:400;font-size:12px"> /person</span>':''}</div></div>`
@@ -688,7 +743,9 @@ function flightCard(x){
 }
 
 function renderResults(){
-  const d=LAST, opts=stayOptions(), bcard=bestCard(), sd=(bcard&&bcard.stay_dates)||d.stay_dates;
+  const d=LAST;
+  d.results.forEach((r,i)=>{ if(r._id==null) r._id="c"+i; });  // stable id for leg-pick handlers
+  const opts=stayOptions(), bcard=bestCard(), sd=(bcard&&bcard.stay_dates)||d.stay_dates;
   const flying=d.results.filter(r=>!r.error);
   const cheapestTotal = flying.length ? Math.min(...flying.map(tripTotal)) : null;
   // in multi mode, feed the ACCURATE total (live fares, respecting the bag/stay
@@ -767,7 +824,9 @@ function renderResults(){
 
   // stays (compact: 6 shown, filterable, tap to use)
   html += `<div class="sect-title">Places to stay${ sd?` · ${sd.nights} nights, ${sd.check_in} – ${sd.check_out}${bcard&&sd.check_in===bcard.out_date?", matches the cheapest flight":""}`:""}</div>`;
-  if(opts.length){
+  if(bcard && bcard._stayLoading){
+    html += `<div class="card pad"><span class="spin"></span>Finding places to stay for ${sd?sd.nights:""} nights (${sd?sd.check_in:""} – ${sd?sd.check_out:""})…</div>`;
+  } else if(opts.length){
     const types=["All",...new Set(opts.map(o=>o.type))];
     const shown = opts.filter(o=>STAYFILTER==="All"||o.type===STAYFILTER);
     const vis = STAY_ALL ? shown : shown.slice(0,6);
@@ -785,6 +844,11 @@ function renderResults(){
 
   resEl().innerHTML = html;
 
+  // pick a different flight date -> re-price the trip + re-fetch the stays for it
+  resEl().querySelectorAll(".alt.pick[data-pick]").forEach(el=>el.onclick=()=>{
+    const x=LAST.results.find(r=>String(r._id)===el.dataset.card);
+    if(x) pickLeg(x, el.dataset.pick, +el.dataset.i);
+  });
   resEl().querySelectorAll(".stay").forEach(el=>el.onclick=()=>{ SELSTAY=opts[+el.dataset.i]; renderResults(); });
   resEl().querySelectorAll(".stayfilter button").forEach(b=>b.onclick=()=>{ STAYFILTER=b.dataset.t; STAY_ALL=false; renderResults(); });
   resEl().querySelectorAll(".bagchk").forEach(c=>c.onchange=()=>{ BAG_ON=c.checked; renderResults(); });
