@@ -153,6 +153,9 @@
   .fhead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px}
   .ftitle{font-weight:600;font-size:16px;line-height:1.3}
   .fmeta{font-weight:400;font-size:13px;color:var(--sub);margin-top:2px}
+  .nights{display:inline-block;background:var(--accent);color:#fff;font-weight:700;font-size:13px;
+       padding:3px 11px;border-radius:999px;margin-left:8px;vertical-align:2px;white-space:nowrap}
+  .nights.ow{background:#eef0f3;color:var(--sub)}
   .flink{font-size:13px;font-weight:600;white-space:nowrap;flex:none}
   .ftotal{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;
        border-top:1px solid var(--line);padding-top:13px}
@@ -273,16 +276,16 @@
           <label>Get there by</label>
           <div class="seg mode" id="outmode">
             <button data-v="both">Both</button>
-            <button data-v="plane" class="on">✈ Plane</button>
-            <button data-v="bus">🚌 Bus</button>
+            <button data-v="plane" class="on">Plane</button>
+            <button data-v="bus">Bus</button>
           </div>
         </div>
         <div class="field" id="backModeField">
           <label>Return by</label>
           <div class="seg mode" id="backmode">
             <button data-v="both" class="on">Both</button>
-            <button data-v="plane">✈ Plane</button>
-            <button data-v="bus">🚌 Bus</button>
+            <button data-v="plane">Plane</button>
+            <button data-v="bus">Bus</button>
           </div>
         </div>
       </div>
@@ -408,7 +411,7 @@ function updateModeUI(){
   let hint="";
   if(oneway) hint="One-way: only the outbound matters.";
   else if(om==="bus" && bm==="plane")
-    hint="⚠ Bus there + fly back isn't offered — pick Bus or Both for the return, or fly out too.";
+    hint="Note: bus there + fly back isn't offered — pick Bus or Both for the return, or fly out too.";
   else if(bm==="plane") hint="Return by plane only — places with no return flight are hidden.";
   else if(bm==="bus") hint="Return by bus only — places with no direct bus home are hidden.";
   else hint="A place is shown only if there's a way back (return flight or direct bus).";
@@ -651,9 +654,14 @@ function flightCard(x){
             <div class="det">${LAST.label} → Chișinău · FlixBus · pick your date on FlixBus · <a href="${bb.book}" target="_blank">book</a>${LAST.bus&&LAST.bus.infobus_back?` · <a href="${LAST.bus.infobus_back}" target="_blank">more carriers</a>`:""}</div></div>
             <div class="price">${money(bb.price)}${ttl>1?'<span class="muted" style="font-weight:400;font-size:12px"> /person</span>':''}</div></div>`
     : "";
+  // loud, unmissable trip length: a pill next to the title (one-way has none)
+  const nn = x.one_way ? null : (x.actual_nights || (x.stay_dates && x.stay_dates.nights));
+  const nightsPill = x.one_way
+    ? `<span class="nights ow">one-way</span>`
+    : (nn ? `<span class="nights">${nn} night${nn>1?"s":""}</span>` : "");
   return `<div class="card pad" style="margin-bottom:16px">
     <div class="fhead">
-      <div><div class="ftitle">${x.name} → ${LAST.label}</div><div class="fmeta">${kind} · ${ttl} traveler${ttl>1?"s":""}</div></div>
+      <div><div class="ftitle">${x.name} → ${LAST.label}${nightsPill}</div><div class="fmeta">${kind} · ${ttl} traveler${ttl>1?"s":""}</div></div>
       <a class="flink" href="${x.booking_link}" target="_blank">${x.bus_only?"Book bus":(x.one_way?"Book one-way":"Book round trip")} &rarr;</a>
     </div>
     ${legRow("Outbound", x.out)}
@@ -689,7 +697,7 @@ function renderResults(){
     onCityTotal(SEL, cheapestTotal, Math.min(...flying.map(r=>r.flight_total)));
   let html = `<div class="summary">
       <b>${d.results[0]? (d.results.find(r=>!r.error)||d.results[0]).name : ""} → ${d.label}</b>
-      ${sd?`· <span>${sd.check_in} – ${sd.check_out}</span> · <span>${sd.nights} nights</span>`:""}
+      ${sd?`· <span>${sd.check_in} – ${sd.check_out}</span> · <b>${sd.nights} night${sd.nights>1?"s":""}</b>`:""}
       · <span>${travelers} traveler${travelers>1?"s":""}</span></div>`;
   if(cheapestTotal!=null)
     html += `<div class="total-card"><div class="lab">Cheapest trip, all-in${BAG_ON?" (incl. bag)":""}</div>
