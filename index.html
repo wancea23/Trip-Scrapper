@@ -338,6 +338,13 @@
 
 <script>
 const $ = id => document.getElementById(id);
+// this browser's own random id (kept in localStorage). Sent with every Telegram
+// call so the app shows/manages ONLY this visitor's paired chat + hunts.
+function bid(){ let v=localStorage.getItem("tf_bid");
+  if(!v){ v=(window.crypto&&crypto.randomUUID)?crypto.randomUUID()
+           :(Date.now().toString(36)+Math.random().toString(36).slice(2));
+          localStorage.setItem("tf_bid", v); }
+  return v; }
 let CUR="EUR", COUNTRIES=[], ORIGINS=[], EXTRAS=[], SEL=null, STEP=1, MODE="plan";
 let LAST=null, SELSTAY=null, STAYFILTER="All", BAG_ON=false, STAY_ALL=false, BUS_SHOW=true;
 const STEPS=["Destination","Details","Extra costs","Your trip"];
@@ -992,7 +999,7 @@ async function submitHunt(places, price, metric){
   /* pairing-aware: not set up -> open the setup guide; not paired -> open pairing
      and auto-submit this hunt as soon as the code is redeemed */
   metric = metric || "total";
-  const st = await (await fetch("/api/tg/status")).json();
+  const st = await (await fetch("/api/tg/status?bid="+encodeURIComponent(bid()))).json();
   if(!st.configured){
     $("tgOverlay").classList.add("open"); tgRender();
     toast("Set up the Telegram bot once (instructions shown), then hunt away", true);
@@ -1005,7 +1012,7 @@ async function submitHunt(places, price, metric){
     return false;
   }
   const r = await fetch("/api/tg/hunt",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({places, price, metric, include_bag:BAG_ON})});
+    body:JSON.stringify({places, price, metric, include_bag:BAG_ON, browser_id:bid()})});
   const j = await r.json();
   if(j.error){ toast("Error: "+j.error, true); return false; }
   let m = `Hunting ${j.added.join(", ")} — ${METRIC_LABELS[metric]||metric} at ≤${price} ${CUR}, Telegram pings you on a drop`;
@@ -1025,7 +1032,7 @@ function tgHide(){ $("tgOverlay").classList.remove("open"); clearInterval(TG_POL
 function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 async function tgRender(){
-  const st = await (await fetch("/api/tg/status")).json();
+  const st = await (await fetch("/api/tg/status?bid="+encodeURIComponent(bid()))).json();
   if(!st.configured){
     $("tgBody").innerHTML = `
       <p>Get price-drop alerts on your phone. One-time setup:</p>
@@ -1039,7 +1046,7 @@ async function tgRender(){
   }
   if(!st.users || !st.users.length){ tgPairing(st); return; }
   clearInterval(TG_POLL); TG_POLL=null;
-  const d = await (await fetch("/api/tg/hunts")).json();
+  const d = await (await fetch("/api/tg/hunts?bid="+encodeURIComponent(bid()))).json();
   const rows = d.hunts.map(h=>`<div class="huntrow">
       <span><b>${esc(h.place)}</b> <span class="muted">${h.kind} · ${METRIC_LABELS[h.metric]||h.metric||"full trip"}</span> · ≤${h.max_price} ${h.currency}
         ${h.last_price!=null?`<span class="muted">· last ${h.last_price} ${h.currency}</span>`:""}</span>
@@ -1066,7 +1073,7 @@ async function tgRender(){
   $("huntAdd").onclick=async()=>{
     const r = await fetch("/api/tg/hunt",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({places:$("huntPlaces").value, price:$("huntPrice").value,
-                           metric:$("huntMetric").value})});
+                           metric:$("huntMetric").value, browser_id:bid()})});
     const j = await r.json();
     if(j.error){ $("huntMsg").textContent="Error: "+j.error; return; }
     if(j.errors && j.errors.length){ $("huntMsg").textContent="Skipped: "+j.errors.join("; "); setTimeout(tgRender,1200); }
@@ -1074,7 +1081,7 @@ async function tgRender(){
   };
   $("tgBody").querySelectorAll(".del").forEach(b=>b.onclick=async()=>{
     await fetch("/api/tg/hunt_delete",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({id:+b.dataset.id})});
+      body:JSON.stringify({id:+b.dataset.id, browser_id:bid()})});
     tgRender();
   });
   const rp=$("tgRepair"); if(rp) rp.onclick=e=>{ e.preventDefault(); tgPairing(st,true); };
@@ -1082,7 +1089,8 @@ async function tgRender(){
 
 async function tgPairing(st, force){
   if(!TG_CODE || force){
-    const r = await fetch("/api/tg/code",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    const r = await fetch("/api/tg/code",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({browser_id:bid()})});
     const j = await r.json();
     if(j.error){ $("tgBody").innerHTML=`<p style="color:#b42318">${esc(j.error)}</p>`; return; }
     TG_CODE=j;
@@ -1100,7 +1108,7 @@ async function tgPairing(st, force){
   const sig = u=>JSON.stringify((u||[]).map(x=>x.chat_id+"|"+x.linked_at));
   const base = sig(st.users);
   TG_POLL=setInterval(async()=>{
-    const s = await (await fetch("/api/tg/status")).json();
+    const s = await (await fetch("/api/tg/status?bid="+encodeURIComponent(bid()))).json();
     if(sig(s.users)!==base){
       clearInterval(TG_POLL); TG_POLL=null; TG_CODE=null;
       if(TG_AFTER_PAIR){    // a hunt was waiting on this pairing - fire it now

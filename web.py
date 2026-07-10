@@ -18,6 +18,7 @@ import urllib.request
 import webbrowser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit, parse_qs
 
 import trip_scraper as ts
 import bot as tgbot  # Telegram pairing + price hunts
@@ -536,15 +537,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        # each browser sends its own localStorage id as ?bid=... so the Telegram
+        # panel scopes to that visitor's paired chat, not a shared global list
+        bid = (parse_qs(parsed.query).get("bid") or [None])[0]
+        if path in ("/", "/index.html"):
             with open(INDEX, "rb") as fh:
                 self._send(200, fh.read(), "text/html; charset=utf-8")
-        elif self.path == "/api/cities":
+        elif path == "/api/cities":
             self._send(200, cities_payload())
-        elif self.path == "/api/tg/status":
-            self._send(200, tgbot.status(CFG))
-        elif self.path == "/api/tg/hunts":
-            self._send(200, tgbot.hunts_payload())
+        elif path == "/api/tg/status":
+            self._send(200, tgbot.status(CFG, bid))
+        elif path == "/api/tg/hunts":
+            self._send(200, tgbot.hunts_payload(bid))
         else:
             self._send(404, {"error": "not found"})
 
@@ -552,6 +558,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
+            bid = body.get("browser_id")  # the caller's browser identity (see do_GET)
             if self.path == "/api/search":
                 self._send(200, do_search(body))
             elif self.path == "/api/compare":
@@ -559,14 +566,14 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/multi":
                 self._send(200, do_multi(body))
             elif self.path == "/api/tg/code":
-                self._send(200, tgbot.make_code(CFG))
+                self._send(200, tgbot.make_code(CFG, bid))
             elif self.path == "/api/tg/hunt":
                 self._send(200, tgbot.add_hunts_ui(body.get("places", ""),
                                                    body.get("price"), CFG,
                                                    body.get("metric", "total"),
-                                                   bool(body.get("include_bag"))))
+                                                   bool(body.get("include_bag")), bid))
             elif self.path == "/api/tg/hunt_delete":
-                self._send(200, tgbot.remove_hunt_ui(body.get("id")))
+                self._send(200, tgbot.remove_hunt_ui(body.get("id"), bid))
             else:
                 self._send(404, {"error": "not found"})
         except ValueError as e:  # bad input (dates, destination, malformed JSON)

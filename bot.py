@@ -101,7 +101,13 @@ def _db():
     db.execute("""CREATE TABLE IF NOT EXISTS tg_users (
                     chat_id INTEGER PRIMARY KEY, name TEXT, linked_at TEXT)""")
     db.execute("""CREATE TABLE IF NOT EXISTS tg_codes (
-                    code TEXT PRIMARY KEY, created REAL, chat_id INTEGER)""")
+                    code TEXT PRIMARY KEY, created REAL, chat_id INTEGER,
+                    browser_id TEXT)""")
+    # one web visitor (a random id kept in their browser's localStorage) -> their
+    # Telegram chat. This is what lets each browser see/manage ONLY its own paired
+    # chat's hunts, instead of everyone sharing one global list.
+    db.execute("""CREATE TABLE IF NOT EXISTS web_sessions (
+                    browser_id TEXT PRIMARY KEY, chat_id INTEGER, linked_at TEXT)""")
     db.execute("""CREATE TABLE IF NOT EXISTS hunts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER, place TEXT, kind TEXT,
@@ -109,7 +115,8 @@ def _db():
                     last_price REAL, last_checked TEXT, last_alert REAL,
                     metric TEXT DEFAULT 'total', include_bag INTEGER DEFAULT 0)""")
     for stmt in ("ALTER TABLE hunts ADD COLUMN metric TEXT DEFAULT 'total'",
-                 "ALTER TABLE hunts ADD COLUMN include_bag INTEGER DEFAULT 0"):
+                 "ALTER TABLE hunts ADD COLUMN include_bag INTEGER DEFAULT 0",
+                 "ALTER TABLE tg_codes ADD COLUMN browser_id TEXT"):
         try:  # migrate older hunts tables
             db.execute(stmt)
         except sqlite3.OperationalError:
@@ -118,31 +125,49 @@ def _db():
     return db
 
 
-def new_code():
+def new_code(browser_id=None):
     db = _db()
     db.execute("DELETE FROM tg_codes WHERE created < ?", (time.time() - CODE_TTL,))
     code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
-    db.execute("INSERT OR REPLACE INTO tg_codes (code, created, chat_id) VALUES (?,?,NULL)",
-               (code, time.time()))
+    db.execute("INSERT OR REPLACE INTO tg_codes (code, created, chat_id, browser_id) "
+               "VALUES (?,?,NULL,?)", (code, time.time(), browser_id))
     db.commit()
     db.close()
     return code
 
 
 def try_pair(code, chat_id, name):
-    """Redeem a pairing code. True if it was valid and this chat is now linked."""
+    """Redeem a pairing code. True if it was valid and this chat is now linked.
+    If the code was minted by a web browser (carries its browser_id), also bind
+    that browser to this chat so the website scopes to it."""
     db = _db()
-    row = db.execute("SELECT code FROM tg_codes WHERE code=? AND chat_id IS NULL "
+    row = db.execute("SELECT browser_id FROM tg_codes WHERE code=? AND chat_id IS NULL "
                      "AND created >= ?", (code, time.time() - CODE_TTL)).fetchone()
-    if not row:
+    if row is None:
         db.close()
         return False
+    browser_id = row[0]
+    now = datetime.now().isoformat(timespec="seconds")
     db.execute("UPDATE tg_codes SET chat_id=? WHERE code=?", (chat_id, code))
     db.execute("INSERT OR REPLACE INTO tg_users (chat_id, name, linked_at) VALUES (?,?,?)",
-               (chat_id, name, datetime.now().isoformat(timespec="seconds")))
+               (chat_id, name, now))
+    if browser_id:  # the browser that generated the code now owns this chat on the web
+        db.execute("INSERT OR REPLACE INTO web_sessions (browser_id, chat_id, linked_at) "
+                   "VALUES (?,?,?)", (browser_id, chat_id, now))
     db.commit()
     db.close()
     return True
+
+
+def session_chat(browser_id):
+    """The Telegram chat_id bound to one browser (its localStorage id), or None."""
+    if not browser_id:
+        return None
+    db = _db()
+    row = db.execute("SELECT chat_id FROM web_sessions WHERE browser_id=?",
+                     (browser_id,)).fetchone()
+    db.close()
+    return row[0] if row else None
 
 
 def is_paired(chat_id):
@@ -591,15 +616,20 @@ def start_in_background(cfg):
 # --------------------------------------------------------------------------- #
 #  Web-API helpers (used by web.py)
 # --------------------------------------------------------------------------- #
-def status(cfg):
+def status(cfg, browser_id=None):
+    """Bot config + THIS browser's own link state (not everyone's). `users` is 0 or
+    1 entry (this browser's paired chat), so the front end's existing users.length
+    check now means 'is THIS browser linked'."""
     token = bot_token(cfg)
     if not token:
         return {"configured": False}
+    chat_id = session_chat(browser_id)
+    mine = [u for u in paired_users() if u["chat_id"] == chat_id] if chat_id else []
     return {"configured": True, "username": bot_username(token),
-            "users": paired_users(), "hunts": len(list_hunts())}
+            "users": mine, "hunts": len(list_hunts(chat_id)) if chat_id else 0}
 
 
-def make_code(cfg):
+def make_code(cfg, browser_id=None):
     token = bot_token(cfg)
     if not token:
         raise ValueError("no bot token - put it in config.json -> telegram.bot_token "
@@ -607,21 +637,25 @@ def make_code(cfg):
     user = bot_username(token)
     if not user:
         raise ValueError("the bot token doesn't work (Telegram getMe failed) - check it")
-    code = new_code()
+    code = new_code(browser_id)  # tie the code to this browser -> binds on redeem
     link = f"https://t.me/{user}?start={code}"
     return {"code": code, "username": user, "link": link}
 
 
-def hunts_payload():
-    return {"hunts": list_hunts(), "users": paired_users()}
+def hunts_payload(browser_id=None):
+    """Only the hunts + user of the browser that's asking."""
+    chat_id = session_chat(browser_id)
+    if not chat_id:
+        return {"hunts": [], "users": []}
+    return {"hunts": list_hunts(chat_id),
+            "users": [u for u in paired_users() if u["chat_id"] == chat_id]}
 
 
-def add_hunts_ui(places, price, cfg, metric="total", include_bag=False):
-    """Add hunts from the web UI for the most recently paired chat."""
-    users = paired_users()
-    if not users:
-        raise ValueError("no Telegram linked yet - pair with the code first")
-    chat_id = users[-1]["chat_id"]
+def add_hunts_ui(places, price, cfg, metric="total", include_bag=False, browser_id=None):
+    """Add hunts from the web UI for the chat THIS browser is paired to."""
+    chat_id = session_chat(browser_id)
+    if not chat_id:
+        raise ValueError("link your Telegram first - open the alerts panel and scan the code")
     cities = ts.load_json(ts.CITIES_PATH)
     metric = METRIC_ALIAS.get(str(metric or "total").lower(), "total")
     try:
@@ -643,15 +677,18 @@ def add_hunts_ui(places, price, cfg, metric="total", include_bag=False):
         added.append(place)
     if not added and errors:
         raise ValueError("didn't recognise: " + "; ".join(errors))
-    return {"added": added, "errors": errors, "hunts": list_hunts()}
+    return {"added": added, "errors": errors, "hunts": list_hunts(chat_id)}
 
 
-def remove_hunt_ui(hunt_id):
+def remove_hunt_ui(hunt_id, browser_id=None):
+    """Delete a hunt only if it belongs to THIS browser's chat (no cross-deletes)."""
+    chat_id = session_chat(browser_id)
     db = _db()
-    db.execute("DELETE FROM hunts WHERE id=?", (int(hunt_id),))
-    db.commit()
+    if chat_id is not None:
+        db.execute("DELETE FROM hunts WHERE id=? AND chat_id=?", (int(hunt_id), chat_id))
+        db.commit()
     db.close()
-    return {"hunts": list_hunts()}
+    return {"hunts": list_hunts(chat_id) if chat_id else []}
 
 
 if __name__ == "__main__":
