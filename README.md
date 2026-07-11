@@ -1,5 +1,7 @@
 # ✈️ Trip-Scrapper
 
+Take a look: https://trip-scrapper.onrender.com/
+
 A tiny self-hosted trip finder: pick a destination and it finds the **cheapest flights**
 from Iași / Chișinău, scrapes **live Airbnb stays**, adds your **extra costs** (baggage,
 transfers, city tax…), and shows an **all-in trip total** — with a clean local web UI.
