@@ -16,9 +16,12 @@ once, each hunt with its OWN target price:
     /clear      stop them all
 
 A background watcher re-checks all hunts every `check_interval_minutes`
-(config.json) and messages you when a hunt's cheapest ROUND-TRIP FLIGHT total
-(all travelers, your config dates/origins) drops to or below its target price.
-Prices are flights-only - open the web app for the all-in trip total.
+(config.json) and messages you when a hunt's watched price drops to or below
+its target. Every hunt remembers the EXACT settings of the search you ran on
+the site before starting it - travelers, departure window, min/max nights,
+trip type, origins and the transport modes - and keeps checking with those
+(a /hunt typed in Telegram uses your latest site search; without one it falls
+back to the config defaults).
 
 Setup: talk to @BotFather -> /newbot -> put the token in config.json ->
 telegram.bot_token, or set the TELEGRAM_BOT_TOKEN environment variable.
@@ -113,9 +116,15 @@ def _db():
                     chat_id INTEGER, place TEXT, kind TEXT,
                     max_price REAL, currency TEXT, created TEXT,
                     last_price REAL, last_checked TEXT, last_alert REAL,
-                    metric TEXT DEFAULT 'total', include_bag INTEGER DEFAULT 0)""")
+                    metric TEXT DEFAULT 'total', include_bag INTEGER DEFAULT 0,
+                    settings TEXT)""")
+    # the LAST search each browser ran (its exact form settings), so a hunt can
+    # keep watching what was searched right before it was started
+    db.execute("""CREATE TABLE IF NOT EXISTS web_searches (
+                    browser_id TEXT PRIMARY KEY, settings TEXT, updated TEXT)""")
     for stmt in ("ALTER TABLE hunts ADD COLUMN metric TEXT DEFAULT 'total'",
                  "ALTER TABLE hunts ADD COLUMN include_bag INTEGER DEFAULT 0",
+                 "ALTER TABLE hunts ADD COLUMN settings TEXT",
                  "ALTER TABLE tg_codes ADD COLUMN browser_id TEXT"):
         try:  # migrate older hunts tables
             db.execute(stmt)
@@ -185,12 +194,14 @@ def paired_users():
     return [{"chat_id": r[0], "name": r[1], "linked_at": r[2]} for r in rows]
 
 
-def add_hunt(chat_id, place, kind, max_price, currency, metric="total", include_bag=0):
+def add_hunt(chat_id, place, kind, max_price, currency, metric="total", include_bag=0,
+             settings=None):
     db = _db()
-    db.execute("INSERT INTO hunts (chat_id, place, kind, max_price, currency, created, metric, include_bag) "
-               "VALUES (?,?,?,?,?,?,?,?)",
+    db.execute("INSERT INTO hunts (chat_id, place, kind, max_price, currency, created, metric, include_bag, settings) "
+               "VALUES (?,?,?,?,?,?,?,?,?)",
                (chat_id, place, kind, max_price, currency,
-                datetime.now().isoformat(timespec="seconds"), metric, 1 if include_bag else 0))
+                datetime.now().isoformat(timespec="seconds"), metric, 1 if include_bag else 0,
+                json.dumps(settings) if settings else None))
     db.commit()
     db.close()
 
@@ -198,13 +209,50 @@ def add_hunt(chat_id, place, kind, max_price, currency, metric="total", include_
 def list_hunts(chat_id=None):
     db = _db()
     q = ("SELECT id, chat_id, place, kind, max_price, currency, last_price, "
-         "last_checked, last_alert, metric, include_bag FROM hunts")
+         "last_checked, last_alert, metric, include_bag, settings FROM hunts")
     rows = (db.execute(q + " WHERE chat_id=? ORDER BY id", (chat_id,)) if chat_id
             else db.execute(q + " ORDER BY id")).fetchall()
     db.close()
     keys = ("id", "chat_id", "place", "kind", "max_price", "currency",
-            "last_price", "last_checked", "last_alert", "metric", "include_bag")
-    return [dict(zip(keys, r)) for r in rows]
+            "last_price", "last_checked", "last_alert", "metric", "include_bag", "settings")
+    hunts = []
+    for r in rows:
+        h = dict(zip(keys, r))
+        try:
+            h["settings"] = json.loads(h["settings"]) if h["settings"] else None
+        except (TypeError, ValueError):
+            h["settings"] = None
+        hunts.append(h)
+    return hunts
+
+
+def record_search(browser_id, settings):
+    """Remember the last search one browser ran (called by web.py on every search),
+    so a /hunt typed in Telegram can watch exactly what was just searched."""
+    if not browser_id or not settings:
+        return
+    db = _db()
+    db.execute("INSERT OR REPLACE INTO web_searches (browser_id, settings, updated) VALUES (?,?,?)",
+               (browser_id, json.dumps(settings), datetime.now().isoformat(timespec="seconds")))
+    db.commit()
+    db.close()
+
+
+def last_search_settings(chat_id):
+    """The most recent search settings from any browser paired to this chat, or None."""
+    if not chat_id:
+        return None
+    db = _db()
+    row = db.execute("SELECT s.settings FROM web_searches s "
+                     "JOIN web_sessions w ON w.browser_id = s.browser_id "
+                     "WHERE w.chat_id=? ORDER BY s.updated DESC LIMIT 1", (chat_id,)).fetchone()
+    db.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
 
 
 def remove_hunt(chat_id, hunt_id):
@@ -279,6 +327,71 @@ METRIC_ALIAS = {"total": "total", "full": "total", "trip": "total",
                 "bus": "bus", "stay": "stay", "stays": "stay", "hotel": "stay"}
 
 
+def _mode_set(val):
+    """'plane'/'bus'/'both' (as saved from the search form) -> allowed carriers."""
+    v = str(val or "").strip().lower()
+    if v in ("plane", "flight", "flights", "air", "fly"):
+        return {"plane"}
+    if v in ("bus", "coach", "flixbus"):
+        return {"bus"}
+    return {"plane", "bus"}
+
+
+def hunt_cfg(hunt, cfg):
+    """The config one hunt is checked with: the app config overlaid with the exact
+    settings of the search that started the hunt (departure window, nights,
+    travelers, trip type, origins, extras). Old hunts without settings keep the
+    config defaults. Returns (config, out_modes, back_modes)."""
+    s = hunt.get("settings") or {}
+    if not s:
+        return cfg, {"plane", "bus"}, {"plane", "bus"}
+    c = json.loads(json.dumps(cfg))  # deep copy
+    t = c["trip"]
+    for k in ("depart_from", "depart_to", "type"):
+        if s.get(k):
+            t[k] = str(s[k])
+    for k in ("nights_min", "nights_max", "travelers"):
+        try:
+            if s.get(k):
+                t[k] = max(1, int(s[k]))
+        except (TypeError, ValueError):
+            pass
+    if s.get("origins"):
+        c["origins"] = [str(o).upper() for o in s["origins"] if o]
+    if isinstance(s.get("extras"), list):
+        c["extras"] = s["extras"]
+    return c, _mode_set(s.get("out_mode")), _mode_set(s.get("back_mode"))
+
+
+def settings_desc(s):
+    """One short line saying what a hunt watches, e.g.
+    '2 travelers · 2026-07-01 → 2026-09-30 · 3-5 nights · from IAS+RMO'."""
+    if not s:
+        return "app defaults - search on the site first to hunt your own dates/travelers"
+    bits = []
+    tv = s.get("travelers")
+    if tv:
+        bits.append(f"{tv} traveler{'s' if str(tv) != '1' else ''}")
+    if s.get("depart_from") or s.get("depart_to"):
+        bits.append(f"depart {s.get('depart_from', '?')} → {s.get('depart_to', '?')}")
+    nmin, nmax = s.get("nights_min"), s.get("nights_max")
+    if nmin or nmax:
+        bits.append(f"{nmin}-{nmax} nights" if nmin and nmax and str(nmin) != str(nmax)
+                    else f"{nmin or nmax} nights")
+    if str(s.get("type", "")).lower() == "oneway":
+        bits.append("one-way")
+    if s.get("origins"):
+        bits.append("from " + "+".join(str(o) for o in s["origins"]))
+    om, bm = _mode_set(s.get("out_mode")), _mode_set(s.get("back_mode"))
+    if om != {"plane", "bus"}:
+        bits.append("there by " + next(iter(om)))
+    if bm != {"plane", "bus"}:
+        bits.append("back by " + next(iter(bm)))
+    if s.get("include_bag"):
+        bits.append("+bag")
+    return " · ".join(bits) if bits else "app defaults"
+
+
 def _best_flight(iata, cfg, include_real):
     """Cheapest fetch_flights result across the configured origins, or None."""
     best, borig = None, None
@@ -292,12 +405,19 @@ def _best_flight(iata, cfg, include_real):
     return best, borig
 
 
-def _price_city(metric, label, iata, hloc, cfg, include_real, include_bag=False):
+def _price_city(metric, label, iata, hloc, cfg, include_real, include_bag=False,
+                out_modes=None, back_modes=None):
     """Current price of `metric` for one destination city, or None. The checked
-    bag is an opt-IN (matches the UI checkbox, unchecked by default)."""
+    bag is an opt-IN (matches the UI checkbox, unchecked by default). cfg is the
+    hunt's own config (see hunt_cfg), so dates/nights/travelers/origins are the
+    ones the user searched; the transport modes enforce the site's '100% a way
+    home' rule - never alert on a return trip that has no way back."""
     t = cfg["trip"]
     travelers = max(1, int(t.get("travelers", 1)))
     nmin = ts.nights_bounds(t)[0]
+    one_way = str(t.get("type", "return")).lower() == "oneway"
+    out_modes = out_modes or {"plane", "bus"}
+    back_modes = back_modes or {"plane", "bus"}
 
     if metric == "stay":
         try:
@@ -326,18 +446,69 @@ def _price_city(metric, label, iata, hloc, cfg, include_real, include_bag=False)
                 "what": f"FlixBus {what}, dep {t['depart_from']}",
                 "link": legs[0]["book"] or b["infobus_out"]}
 
-    f, origin = _best_flight(iata, cfg, include_real)
+    def bus_quote(out_date, nights):
+        back_date = None if one_way else (datetime.strptime(out_date, "%Y-%m-%d")
+                                          + timedelta(days=nights)).strftime("%Y-%m-%d")
+        try:
+            return ts.sources.bus_home_options(hloc, out_date, back_date)
+        except Exception:
+            return None
+
+    f = origin = None
+    if "plane" in out_modes:
+        f, origin = _best_flight(iata, cfg, include_real)
+
+    bus_back = 0
+    if f and not one_way:
+        # the way-home rule, same as the site: a return flight when flying back
+        # is allowed, else the direct bus home, else there is NO price here
+        if not (f["back"] and "plane" in back_modes):
+            bq = bus_quote(f["out"]["date"], f["actual_nights"] or nmin)
+            if "bus" in back_modes and bq and bq.get("back"):
+                bus_back = round(bq["back"]["price"] * travelers, 2)
+            else:
+                f = None
+
     if not f:
-        return None
-    dates = f["out"]["date"] + (f" → {f['back']['date']}" if f["back"] else " (one-way)")
+        # no (allowed) flight trip - a pure bus-there-and-back trip can still be
+        # the full-trip price, like the site's direct-bus card
+        if metric != "total" or "bus" not in out_modes or (not one_way and "bus" not in back_modes):
+            return None
+        bq = bus_quote(t["depart_from"], nmin)
+        if not (bq and bq.get("out") and (one_way or bq.get("back"))):
+            return None
+        transport = round((bq["out"]["price"]
+                           + (bq["back"]["price"] if not one_way else 0)) * travelers, 2)
+        out_date = (bq["out"].get("dep") or "")[:10] or t["depart_from"]
+        stay_total = 0
+        try:
+            s = ts.fetch_stay(hloc, out_date, nmin, cfg)
+            stay_total = s["stay_total"] if s else 0
+        except Exception:
+            pass
+        extras_total = ts.compute_extras(cfg.get("extras", []), travelers, nmin)[1]
+        return {"total": round(transport + stay_total + extras_total, 2),
+                "city": label, "travelers": travelers,
+                "what": f"direct bus there{'' if one_way else ' + back'}, dep {out_date}"
+                        + (f", stay {stay_total:g}" if stay_total else ", no stay found"),
+                "link": bq["out"].get("book") or bq.get("infobus_out") or "https://infobus.eu"}
+
+    home_by_bus = bus_back > 0
+    # when the way home is the bus, only the outbound is flown - reprice the legs
+    flight_total = round(f["out"]["price"] * travelers, 2) if home_by_bus else f["flight_total"]
+    bag_legs = 1 if (one_way or home_by_bus) else f["bag_legs"]
+    bag_total = (round(ts.airline_bag_leg(f["out"]["airline"]) * travelers, 2)
+                 if home_by_bus else f["bag_total"])
+    dates = f["out"]["date"] + (" (one-way)" if one_way else
+                                (" → bus home" if home_by_bus else f" → {f['back']['date']}"))
     base = {"city": label, "travelers": travelers, "link": f["booking_link"],
             "what": f"from {ts.ORIGIN_NAMES.get(origin, origin)}, {dates}"}
 
     if metric == "flight":
-        return {**base, "total": f["flight_total"]}
+        return {**base, "total": flight_total}
 
     # total: the app's TRIP TOTAL - flights + bag + ground + stay + extras
-    # (+ the bus ride home when there's no return flight)
+    # (+ the bus ride home when that's the way back)
     nights = f["actual_nights"] or nmin
     stay_total = 0
     try:
@@ -346,34 +517,27 @@ def _price_city(metric, label, iata, hloc, cfg, include_real, include_bag=False)
     except Exception:
         pass
     g = ts.sources.ground_to_airport(origin, f["out"]["date"])
-    ground = round(g["price"] * travelers * f["bag_legs"], 2) if g else 0
+    ground = round(g["price"] * travelers * bag_legs, 2) if g else 0
     extras_total = ts.compute_extras(cfg.get("extras", []), travelers, nights)[1]
-    bus_back = 0
-    if not f["one_way"] and not f["back"]:
-        try:
-            back_date = (datetime.strptime(f["out"]["date"], "%Y-%m-%d")
-                         + timedelta(days=nights)).strftime("%Y-%m-%d")
-            b = ts.sources.bus_home_options(hloc, f["out"]["date"], back_date)
-            if b and b.get("back"):
-                bus_back = round(b["back"]["price"] * travelers, 2)
-        except Exception:
-            pass
-    grand = round(f["flight_total"] + (f["bag_total"] if include_bag else 0)
+    grand = round(flight_total + (bag_total if include_bag else 0)
                   + ground + bus_back + stay_total + extras_total, 2)
     return {**base, "total": grand,
             "what": base["what"] + (f", stay {stay_total:g}" if stay_total else ", no stay found")}
 
 
 def check_hunt(hunt, cfg, cities):
-    """Best current price for one hunt, or None. Airline-site scrapers only run
-    for small hunts (a country can be many cities - stay polite)."""
+    """Best current price for one hunt, or None - checked with the hunt's own
+    saved search settings (dates, nights, travelers, origins, modes). Airline-site
+    scrapers only run for small hunts (a country can be many cities - stay polite)."""
     targets = hunt_targets(hunt, cities)
     include_real = len(targets) <= 2
     metric = METRIC_ALIAS.get(hunt.get("metric") or "total", "total")
     include_bag = bool(hunt.get("include_bag"))
+    hcfg, out_modes, back_modes = hunt_cfg(hunt, cfg)
     best = None
     for label, iata, hloc in targets:
-        r = _price_city(metric, label, iata, hloc, cfg, include_real, include_bag)
+        r = _price_city(metric, label, iata, hloc, hcfg, include_real, include_bag,
+                        out_modes, back_modes)
         if r and (best is None or r["total"] < best["total"]):
             best = r
     return best
@@ -381,13 +545,15 @@ def check_hunt(hunt, cfg, cities):
 
 def fmt_best(hunt, best, cur):
     metric = METRIC_LABEL.get(METRIC_ALIAS.get(hunt.get("metric") or "total", "total"))
+    watching = f"\n<i>{settings_desc(hunt['settings'])}</i>" if hunt.get("settings") else ""
     if not best:
-        return f"<b>{hunt['place']}</b> ({metric}) ≤{hunt['max_price']:g}: no price found right now"
+        return (f"<b>{hunt['place']}</b> ({metric}) ≤{hunt['max_price']:g}: "
+                f"no price found right now{watching}")
     hit = "✅" if best["total"] <= hunt["max_price"] else "…"
     pax = f", {best['travelers']} travelers" if best["travelers"] > 1 else ""
     return (f"{hit} <b>{hunt['place']}</b> {metric} ≤{hunt['max_price']:g}: "
-            f"now <b>{best['total']:g} {cur}</b> ({best['city']} {best['what']}{pax})\n"
-            f"<a href=\"{best['link']}\">book</a>")
+            f"now <b>{best['total']:g} {cur}</b> ({best['city']} {best['what']}{pax})"
+            f"{watching}\n<a href=\"{best['link']}\">book</a>")
 
 
 def check_and_alert(hunt, cfg, cities, token):
@@ -441,6 +607,10 @@ def _cmd_hunt(text, chat_id, cfg, cities, token):
     metric = METRIC_ALIAS.get((m.group(1) or "total").lower(), "total")
     price = float(m.group(3).replace(",", "."))
     cur = cfg["currency"].upper()
+    # hunt with the exact settings of the user's latest search on the site
+    # (travelers, departure window, nights, modes) - not the config defaults
+    settings = last_search_settings(chat_id)
+    include_bag = bool((settings or {}).get("include_bag"))
     added, errors = [], []
     for raw in m.group(2).split(","):
         raw = raw.strip()
@@ -450,13 +620,15 @@ def _cmd_hunt(text, chat_id, cfg, cities, token):
         if kind is None:
             errors.append(f"'{raw}'" + (f" — did you mean <b>{place}</b>?" if place else ""))
             continue
-        add_hunt(chat_id, place, kind, price, cur, metric)
+        add_hunt(chat_id, place, kind, price, cur, metric, include_bag, settings)
         n = len(hunt_targets({"kind": kind, "place": place}, cities))
         added.append(f"<b>{place}</b>" + (f" ({kind}, {n} cities)" if kind == "country" else ""))
     lines = []
     if added:
         lines.append(f"🔭 Hunting {', '.join(added)}: {METRIC_LABEL[metric]} at ≤{price:g} {cur}. "
                      f"I'll ping you when it drops to that. /list to see all.")
+        lines.append(("Watching your last site search: " if settings else "Watching ")
+                     + settings_desc(settings))
     if errors:
         lines.append("Didn't recognise " + "; ".join(errors) +
                      "\n(city or country names as in the app, e.g. Prague, Italy)")
@@ -476,6 +648,8 @@ def _cmd_list(chat_id, cfg, token):
         metric = METRIC_LABEL.get(METRIC_ALIAS.get(h.get("metric") or "total", "total"))
         bag = " +bag" if h.get("include_bag") else ""
         lines.append(f"{i}. <b>{h['place']}</b> ({h['kind']}, {metric}{bag}) ≤{h['max_price']:g} {cur} — {last}")
+        if h.get("settings"):
+            lines.append(f"    <i>{settings_desc(h['settings'])}</i>")
     lines.append("/check to re-check now · /remove n to stop one")
     send(token, chat_id, "\n".join(lines))
 
@@ -651,8 +825,12 @@ def hunts_payload(browser_id=None):
             "users": [u for u in paired_users() if u["chat_id"] == chat_id]}
 
 
-def add_hunts_ui(places, price, cfg, metric="total", include_bag=False, browser_id=None):
-    """Add hunts from the web UI for the chat THIS browser is paired to."""
+def add_hunts_ui(places, price, cfg, metric="total", include_bag=False, browser_id=None,
+                 settings=None):
+    """Add hunts from the web UI for the chat THIS browser is paired to. `settings`
+    is the search form the user had on screen (sent by the front end) so the hunt
+    watches exactly what was searched; without one, the browser's last recorded
+    search is used, then the config defaults."""
     chat_id = session_chat(browser_id)
     if not chat_id:
         raise ValueError("link your Telegram first - open the alerts panel and scan the code")
@@ -664,6 +842,7 @@ def add_hunts_ui(places, price, cfg, metric="total", include_bag=False, browser_
         raise ValueError("the max price must be a number")
     if price <= 0:
         raise ValueError("the max price must be above 0")
+    settings = settings or last_search_settings(chat_id)
     added, errors = [], []
     for raw in str(places).split(","):
         raw = raw.strip()
@@ -673,11 +852,12 @@ def add_hunts_ui(places, price, cfg, metric="total", include_bag=False, browser_
         if kind is None:
             errors.append(raw + (f" (did you mean {place}?)" if place else ""))
             continue
-        add_hunt(chat_id, place, kind, price, cfg["currency"].upper(), metric, include_bag)
+        add_hunt(chat_id, place, kind, price, cfg["currency"].upper(), metric, include_bag, settings)
         added.append(place)
     if not added and errors:
         raise ValueError("didn't recognise: " + "; ".join(errors))
-    return {"added": added, "errors": errors, "hunts": list_hunts(chat_id)}
+    return {"added": added, "errors": errors, "hunts": list_hunts(chat_id),
+            "watching": settings_desc(settings) if settings else None}
 
 
 def remove_hunt_ui(hunt_id, browser_id=None):

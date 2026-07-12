@@ -82,6 +82,19 @@ def _cfg_for(body):
     return c
 
 
+# the form settings a search runs with - saved with price hunts so Telegram alerts
+# keep watching exactly what the user searched (dates, nights, travelers, modes)
+SEARCH_SETTING_KEYS = ("depart_from", "depart_to", "nights_min", "nights_max", "travelers",
+                       "type", "origins", "out_mode", "back_mode", "extras", "include_bag")
+
+
+def _search_settings(body):
+    if not isinstance(body, dict):
+        return None
+    s = {k: body[k] for k in SEARCH_SETTING_KEYS if body.get(k) not in (None, "", [])}
+    return s or None
+
+
 def _ground(origin, out_date, travelers, legs):
     """Home (Chisinau) -> the flight's airport, scaled by travelers and legs (there & back)."""
     g = ts.sources.ground_to_airport(origin, out_date)
@@ -605,21 +618,24 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
             bid = body.get("browser_id")  # the caller's browser identity (see do_GET)
-            if self.path == "/api/search":
-                self._send(200, do_search(body))
+            if self.path in ("/api/search", "/api/compare", "/api/multi"):
+                run = {"/api/search": do_search, "/api/compare": do_compare,
+                       "/api/multi": do_multi}[self.path]
+                res = run(body)
+                # remember this browser's settings so a /hunt typed in Telegram
+                # (or a hunt button) watches exactly what was just searched
+                tgbot.record_search(bid, _search_settings(body))
+                self._send(200, res)
             elif self.path == "/api/stay":
                 self._send(200, do_stay(body))
-            elif self.path == "/api/compare":
-                self._send(200, do_compare(body))
-            elif self.path == "/api/multi":
-                self._send(200, do_multi(body))
             elif self.path == "/api/tg/code":
                 self._send(200, tgbot.make_code(CFG, bid))
             elif self.path == "/api/tg/hunt":
                 self._send(200, tgbot.add_hunts_ui(body.get("places", ""),
                                                    body.get("price"), CFG,
                                                    body.get("metric", "total"),
-                                                   bool(body.get("include_bag")), bid))
+                                                   bool(body.get("include_bag")), bid,
+                                                   _search_settings(body.get("settings"))))
             elif self.path == "/api/tg/hunt_delete":
                 self._send(200, tgbot.remove_hunt_ui(body.get("id"), bid))
             else:

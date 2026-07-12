@@ -575,10 +575,12 @@ function onFilter(q){
 function originsSel(){ return [...$("origins").querySelectorAll(".chip.on")].map(c=>c.dataset.o); }
 function tripType(){ return $("triptype").querySelector("button.on").dataset.v; }
 function body(extra){
+  // browser_id lets the server remember THIS browser's last search settings, so a
+  // hunt (even one typed in Telegram) watches exactly what was searched
   return Object.assign({ type:tripType(), depart_from:$("from").value, depart_to:$("to").value,
     nights_min:$("nmin").value, nights_max:$("nmax").value, travelers, origins:originsSel(),
     out_mode:outMode(), back_mode:backMode(),
-    extras:EXTRAS, include_bag:BAG_ON }, extra);
+    extras:EXTRAS, include_bag:BAG_ON, browser_id:bid() }, extra);
 }
 
 // where the classic results page renders: the main #results, or the per-city
@@ -1090,10 +1092,12 @@ async function submitHunt(places, price, metric){
     return false;
   }
   const r = await fetch("/api/tg/hunt",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({places, price, metric, include_bag:BAG_ON, browser_id:bid()})});
+    body:JSON.stringify({places, price, metric, include_bag:BAG_ON, browser_id:bid(),
+                         settings: body()})});  // hunt with the settings you searched
   const j = await r.json();
   if(j.error){ toast("Error: "+j.error, true); return false; }
   let m = `Hunting ${j.added.join(", ")} — ${METRIC_LABELS[metric]||metric} at ≤${price} ${CUR}, Telegram pings you on a drop`;
+  if(j.watching) m += ` · watching ${j.watching}`;
   if(j.errors && j.errors.length) m += ` (skipped: ${j.errors.join("; ")})`;
   toast(m);
   return true;
@@ -1108,6 +1112,21 @@ $("tgClose").onclick=tgHide;
 $("tgOverlay").onclick=e=>{ if(e.target.id==="tgOverlay") tgHide(); };
 function tgHide(){ $("tgOverlay").classList.remove("open"); clearInterval(TG_POLL); TG_POLL=null; TG_CODE=null; }
 function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function huntSet(s){  // one short line: what this hunt watches (its saved search)
+  if(!s) return "";
+  const b=[];
+  if(s.travelers) b.push(s.travelers+" traveler"+(+s.travelers>1?"s":""));
+  if(s.depart_from&&s.depart_to) b.push(s.depart_from+" → "+s.depart_to);
+  if(s.nights_min&&s.nights_max) b.push(String(s.nights_min)===String(s.nights_max)
+      ? s.nights_min+" nights" : s.nights_min+"–"+s.nights_max+" nights");
+  if(String(s.type||"").toLowerCase()==="oneway") b.push("one-way");
+  if(s.origins&&s.origins.length) b.push("from "+s.origins.join("+"));
+  if(s.out_mode&&s.out_mode!=="both") b.push("there by "+s.out_mode);
+  if(s.back_mode&&s.back_mode!=="both") b.push("back by "+s.back_mode);
+  if(s.include_bag) b.push("+bag");
+  return b.join(" · ");
+}
 
 async function tgRender(){
   const st = await (await fetch("/api/tg/status?bid="+encodeURIComponent(bid()))).json();
@@ -1127,11 +1146,12 @@ async function tgRender(){
   const d = await (await fetch("/api/tg/hunts?bid="+encodeURIComponent(bid()))).json();
   const rows = d.hunts.map(h=>`<div class="huntrow">
       <span><b>${esc(h.place)}</b> <span class="muted">${h.kind} · ${METRIC_LABELS[h.metric]||h.metric||"full trip"}</span> · ≤${h.max_price} ${h.currency}
-        ${h.last_price!=null?`<span class="muted">· last ${h.last_price} ${h.currency}</span>`:""}</span>
+        ${h.last_price!=null?`<span class="muted">· last ${h.last_price} ${h.currency}</span>`:""}
+        ${h.settings?`<div class="muted" style="font-size:12px;margin-top:2px">${esc(huntSet(h.settings))}</div>`:""}</span>
       <button class="del" data-id="${h.id}" title="stop this hunt">&times;</button></div>`).join("");
   $("tgBody").innerHTML = `
     <p>Connected: <b>${st.users.map(u=>esc(u.name)).join(", ")}</b> · bot <b>@${esc(st.username)}</b></p>
-    <p style="margin:10px 0 2px"><b>New hunt</b> — a city, a whole country, or several separated by commas. Pick what to watch: the full trip total or just one part.</p>
+    <p style="margin:10px 0 2px"><b>New hunt</b> — a city, a whole country, or several separated by commas. Pick what to watch: the full trip total or just one part. Hunts watch your current search settings (dates, nights, travelers).</p>
     <div class="huntform">
       <input id="huntPlaces" placeholder="Prague, Italy, Japan">
       <input id="huntPrice" type="number" min="1" placeholder="max ${CUR}">
@@ -1151,7 +1171,8 @@ async function tgRender(){
   $("huntAdd").onclick=async()=>{
     const r = await fetch("/api/tg/hunt",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({places:$("huntPlaces").value, price:$("huntPrice").value,
-                           metric:$("huntMetric").value, browser_id:bid()})});
+                           metric:$("huntMetric").value, browser_id:bid(),
+                           settings: body()})});  // hunt with the settings on the form
     const j = await r.json();
     if(j.error){ $("huntMsg").textContent="Error: "+j.error; return; }
     if(j.errors && j.errors.length){ $("huntMsg").textContent="Skipped: "+j.errors.join("; "); setTimeout(tgRender,1200); }
