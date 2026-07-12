@@ -761,7 +761,7 @@ function renderResults(){
   if(cheapestTotal!=null)
     html += `<div class="total-card"><div class="lab">Cheapest trip, all-in${BAG_ON?" (incl. bag)":""}</div>
       <div class="big">~${money(Math.round(cheapestTotal*100)/100)}</div>
-      <div class="sub">Fares tagged <b>real price</b> are scraped live from the airline (Ryanair, Wizz Air, FlyOne); <b>cached est.</b> ones come from a cache and often read low — confirm on the booking page. Stays are live from Airbnb; airport transfer is an estimate.</div></div>`;
+      <div class="sub">Fares tagged <b>real price</b> are scraped live from the airline (Ryanair, Wizz Air, FlyOne); <b>cached est.</b> ones come from a cache and often read low — confirm on the booking page. Stays are live from Airbnb.</div></div>`;
 
   // hunt this trip: bot pings when the chosen part (or the whole trip) drops
   const cheapFlight = flying.length ? Math.min(...flying.map(r=>r.flight_total)) : null;
@@ -1144,13 +1144,25 @@ async function tgRender(){
   if(!st.users || !st.users.length){ tgPairing(st); return; }
   clearInterval(TG_POLL); TG_POLL=null;
   const d = await (await fetch("/api/tg/hunts?bid="+encodeURIComponent(bid()))).json();
+  const metricOpt=sel=>["total","flight","bus","stay"].map(v=>`<option value="${v}"${(sel||"total")===v?" selected":""}>${METRIC_LABELS[v]||v}</option>`).join("");
   const rows = d.hunts.map(h=>`<div class="huntrow">
       <span><b>${esc(h.place)}</b> <span class="muted">${h.kind} · ${METRIC_LABELS[h.metric]||h.metric||"full trip"}</span> · ≤${h.max_price} ${h.currency}
         ${h.last_price!=null?`<span class="muted">· last ${h.last_price} ${h.currency}</span>`:""}
-        ${h.settings?`<div class="muted" style="font-size:12px;margin-top:2px">${esc(huntSet(h.settings))}</div>`:""}</span>
-      <button class="del" data-id="${h.id}" title="stop this hunt">&times;</button></div>`).join("");
+        ${h.settings?`<div class="muted" style="font-size:12px;margin-top:2px">${esc(huntSet(h.settings))}</div>`:""}
+        <div id="he-${h.id}" style="display:none;margin-top:8px;font-size:13px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">&le;
+            <input type="number" min="1" id="hep-${h.id}" value="${h.max_price}" style="width:82px;padding:6px 8px"> ${h.currency}
+            <select id="hem-${h.id}" style="padding:6px 8px;border-radius:9px;font-size:13px">${metricOpt(h.metric)}</select>
+            <button class="btn" id="hesave-${h.id}" type="button" style="padding:6px 12px;font-size:13px">Save</button></div>
+          <label class="muted" style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:12px;cursor:pointer">
+            <input type="checkbox" id="hes-${h.id}"> replace its watched settings with my current search form (dates, nights, travelers, modes)</label>
+        </div></span>
+      <span style="display:flex;gap:4px;align-items:flex-start;white-space:nowrap">
+        <button class="hedit" data-id="${h.id}" title="change the price or what this hunt watches" type="button" style="border:none;background:none;color:var(--accent);cursor:pointer;font-size:13px">edit</button>
+        <button class="del" data-id="${h.id}" title="stop this hunt">&times;</button></span></div>`).join("");
   $("tgBody").innerHTML = `
     <p>Connected: <b>${st.users.map(u=>esc(u.name)).join(", ")}</b> · bot <b>@${esc(st.username)}</b></p>
+    <p class="muted" style="font-size:13px;margin:2px 0 0">Hunts belong to your Telegram account — every device paired to it (laptop, phone…) sees and can edit the same list below.</p>
     <p style="margin:10px 0 2px"><b>New hunt</b> — a city, a whole country, or several separated by commas. Pick what to watch: the full trip total or just one part. Hunts watch your current search settings (dates, nights, travelers).</p>
     <div class="huntform">
       <input id="huntPlaces" placeholder="Prague, Italy, Japan">
@@ -1183,6 +1195,23 @@ async function tgRender(){
       body:JSON.stringify({id:+b.dataset.id, browser_id:bid()})});
     tgRender();
   });
+  $("tgBody").querySelectorAll(".hedit").forEach(b=>b.onclick=()=>{
+    const el=$("he-"+b.dataset.id);
+    el.style.display = el.style.display==="none" ? "block" : "none";
+  });
+  d.hunts.forEach(h=>{
+    const sv=$("hesave-"+h.id); if(!sv) return;
+    sv.onclick=async()=>{
+      const payload={id:h.id, price:+$("hep-"+h.id).value, metric:$("hem-"+h.id).value, browser_id:bid()};
+      if($("hes-"+h.id).checked){ payload.settings=body(); payload.include_bag=BAG_ON; }
+      const r=await fetch("/api/tg/hunt_update",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(payload)});
+      const j=await r.json();
+      if(j.error){ toast("Error: "+j.error, true); return; }
+      toast(`Updated ${h.place}`+(j.watching?` — now watching ${j.watching}`:""));
+      tgRender();
+    };
+  });
   const rp=$("tgRepair"); if(rp) rp.onclick=e=>{ e.preventDefault(); tgPairing(st,true); };
 }
 
@@ -1200,7 +1229,8 @@ async function tgPairing(st, force){
     <img class="qr" src="${qr}" alt="QR">
     <div class="paircode">${TG_CODE.code}</div>
     <p style="text-align:center"><a href="${TG_CODE.link}" target="_blank">open @${esc(TG_CODE.username)} in Telegram</a></p>
-    <p class="muted" style="font-size:13px;text-align:center">Code valid 15 minutes · waiting for you to send it… <span class="spin" style="width:12px;height:12px"></span></p>`;
+    <p class="muted" style="font-size:13px;text-align:center">Code valid 15 minutes · waiting for you to send it… <span class="spin" style="width:12px;height:12px"></span></p>
+    <p class="muted" style="font-size:13px;text-align:center">Already paired on another device? Same Telegram account = same hunts — pairing this device just adds it.</p>`;
   clearInterval(TG_POLL);
   // wait until the paired-users set CHANGES (covers both a new phone and the same
   // phone re-pairing, where only linked_at moves)

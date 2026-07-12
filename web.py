@@ -636,6 +636,10 @@ class Handler(BaseHTTPRequestHandler):
                                                    body.get("metric", "total"),
                                                    bool(body.get("include_bag")), bid,
                                                    _search_settings(body.get("settings"))))
+            elif self.path == "/api/tg/hunt_update":
+                self._send(200, tgbot.update_hunt_ui(body.get("id"), body.get("price"),
+                                                     body.get("metric"), body.get("include_bag"),
+                                                     _search_settings(body.get("settings")), bid))
             elif self.path == "/api/tg/hunt_delete":
                 self._send(200, tgbot.remove_hunt_ui(body.get("id"), bid))
             else:

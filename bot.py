@@ -860,6 +860,48 @@ def add_hunts_ui(places, price, cfg, metric="total", include_bag=False, browser_
             "watching": settings_desc(settings) if settings else None}
 
 
+def update_hunt_ui(hunt_id, price=None, metric=None, include_bag=None, settings=None,
+                   browser_id=None):
+    """Edit a hunt from the web UI - new max price, metric, and/or replace its
+    watched settings with the search form the user has on screen now. Scoped to
+    THIS browser's paired chat, so nobody edits someone else's hunt. Any change
+    resets the alert memory so the next check can ping at the new target."""
+    chat_id = session_chat(browser_id)
+    if not chat_id:
+        raise ValueError("link your Telegram first - open the alerts panel and scan the code")
+    db = _db()
+    own = db.execute("SELECT 1 FROM hunts WHERE id=? AND chat_id=?",
+                     (int(hunt_id), chat_id)).fetchone()
+    if not own:
+        db.close()
+        raise ValueError("that hunt doesn't exist (maybe it was removed on another device)")
+    sets, vals = ["last_alert=NULL"], []
+    if price is not None:
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            raise ValueError("the max price must be a number")
+        if price <= 0:
+            raise ValueError("the max price must be above 0")
+        sets.append("max_price=?")
+        vals.append(price)
+    if metric:
+        sets.append("metric=?")
+        vals.append(METRIC_ALIAS.get(str(metric).lower(), "total"))
+    if include_bag is not None:
+        sets.append("include_bag=?")
+        vals.append(1 if include_bag else 0)
+    if settings:
+        sets.append("settings=?")
+        vals.append(json.dumps(settings))
+    db.execute(f"UPDATE hunts SET {', '.join(sets)} WHERE id=? AND chat_id=?",
+               (*vals, int(hunt_id), chat_id))
+    db.commit()
+    db.close()
+    return {"hunts": list_hunts(chat_id),
+            "watching": settings_desc(settings) if settings else None}
+
+
 def remove_hunt_ui(hunt_id, browser_id=None):
     """Delete a hunt only if it belongs to THIS browser's chat (no cross-deletes)."""
     chat_id = session_chat(browser_id)

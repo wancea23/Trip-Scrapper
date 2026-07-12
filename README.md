@@ -4,7 +4,7 @@ Take a look: https://trip-scrapper.onrender.com/
 
 A tiny self-hosted trip finder: pick a destination and it finds the **cheapest flights**
 from Iași / Chișinău, scrapes **live Airbnb stays**, adds your **extra costs** (baggage,
-transfers, city tax…), and shows an **all-in trip total** — with a clean local web UI.
+insurance, food…), and shows an **all-in trip total** — with a clean local web UI.
 
 Built around free / no-key data sources, so anyone can run it.
 
@@ -16,7 +16,7 @@ Built around free / no-key data sources, so anyone can run it.
 - 🏠 **Live Airbnb stays** scraped directly (no key) — homes, rooms, hotels, hostels, B&Bs — each with its type, price, and a working listing link. Tap one to use it in the total.
 - 📅 The room dates **always match the chosen flight**.
 - ⏱ **Min / max nights** control.
-- ➕ Editable **extra costs** (checked bag, airport transfer, city/tourist tax, bus, insurance, food) itemised into the total.
+- ➕ Editable **extra costs** (checked bag, insurance, food) itemised into the total.
 - 🌐 **Compare all destinations** ranked by price.
 - 💾 SQLite price history + optional **Telegram alerts** on price drops (`--watch`).
 

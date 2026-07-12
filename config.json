@@ -20,8 +20,6 @@
   },
 
   "extras": [
-    { "name": "Airport transfer at destination", "amount": 8, "per": "person" },
-    { "name": "City / tourist tax",              "amount": 2, "per": "person_night" },
     { "name": "Travel insurance",                "amount": 0, "per": "person" },
     { "name": "Spending money / food",           "amount": 0, "per": "person_night" }
   ],
