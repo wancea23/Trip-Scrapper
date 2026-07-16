@@ -26,6 +26,11 @@ back to the config defaults).
 Setup: talk to @BotFather -> /newbot -> put the token in config.json ->
 telegram.bot_token, or set the TELEGRAM_BOT_TOKEN environment variable.
 Runs inside `python web.py` automatically, or standalone: `python bot.py`.
+
+Free hosts (Render) wipe the disk on every deploy/restart, which used to erase
+all pairings and hunts. The bot therefore keeps a backup of its own tables as a
+single pinned document in the owner's chat (silently edited in place after each
+change) and restores from it whenever it boots with an empty database.
 """
 
 import difflib
@@ -76,6 +81,17 @@ def tg(token, method, **params):
     try:
         r = requests.post(f"https://api.telegram.org/bot{token}/{method}",
                           json=params, timeout=65)
+        data = r.json()
+        return data.get("result") if data.get("ok") else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def tg_upload(token, method, files, **params):
+    """Like tg(), but multipart (file uploads can't go as JSON)."""
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/{method}",
+                          data=params, files=files, timeout=65)
         data = r.json()
         return data.get("result") if data.get("ok") else None
     except (requests.RequestException, ValueError):
@@ -165,6 +181,7 @@ def try_pair(code, chat_id, name):
                    "VALUES (?,?,?)", (browser_id, chat_id, now))
     db.commit()
     db.close()
+    mark_dirty()
     return True
 
 
@@ -204,6 +221,7 @@ def add_hunt(chat_id, place, kind, max_price, currency, metric="total", include_
                 json.dumps(settings) if settings else None))
     db.commit()
     db.close()
+    mark_dirty()
 
 
 def list_hunts(chat_id=None):
@@ -236,6 +254,7 @@ def record_search(browser_id, settings):
                (browser_id, json.dumps(settings), datetime.now().isoformat(timespec="seconds")))
     db.commit()
     db.close()
+    mark_dirty()
 
 
 def last_search_settings(chat_id):
@@ -260,6 +279,8 @@ def remove_hunt(chat_id, hunt_id):
     n = db.execute("DELETE FROM hunts WHERE chat_id=? AND id=?", (chat_id, hunt_id)).rowcount
     db.commit()
     db.close()
+    if n:
+        mark_dirty()
     return n > 0
 
 
@@ -268,6 +289,8 @@ def clear_hunts(chat_id):
     n = db.execute("DELETE FROM hunts WHERE chat_id=?", (chat_id,)).rowcount
     db.commit()
     db.close()
+    if n:
+        mark_dirty()
     return n
 
 
@@ -281,6 +304,158 @@ def record_check(hunt_id, price, alerted=None):
                    (price, datetime.now().isoformat(timespec="seconds"), hunt_id))
     db.commit()
     db.close()
+    mark_dirty()
+
+
+# --------------------------------------------------------------------------- #
+#  Surviving host restarts. Render's free tier gives the app an EPHEMERAL disk:
+#  every deploy or restart starts from a blank trip_prices.db, so pairings and
+#  hunts used to vanish. Telegram itself is the durable store we already have:
+#  after every change the bot uploads a small JSON dump of its tables as a
+#  pinned document in the owner's chat (edited in place, no notification spam),
+#  and on a fresh boot it downloads that pinned document and restores the rows.
+#  The owner's chat id is remembered in the bot's own profile short description
+#  ("backup:<id>"), which Telegram keeps for us across restarts too.
+# --------------------------------------------------------------------------- #
+BACKUP_TABLES = ("tg_users", "web_sessions", "hunts", "web_searches")
+BACKUP_MARK = "trip-scrapper backup"
+_DIRTY = threading.Event()      # set by mark_dirty(), consumed by persist_loop
+
+
+def mark_dirty():
+    """Something worth keeping changed (pairing / hunt / recorded search) -
+    schedule a backup push. Cheap and safe to call anywhere."""
+    _DIRTY.set()
+
+
+def _backup_chat(token, register=True):
+    """Where backups live: TELEGRAM_BACKUP_CHAT env var, else the chat id saved
+    in the bot's short description, else the first paired user's chat (which we
+    then save to the short description so the NEXT wiped boot can find it)."""
+    env = (os.environ.get("TELEGRAM_BACKUP_CHAT") or "").strip()
+    if env.lstrip("-").isdigit():
+        return int(env)
+    d = tg(token, "getMyShortDescription") or {}
+    m = re.search(r"backup:(-?\d+)", d.get("short_description") or "")
+    if m:
+        return int(m.group(1))
+    for u in paired_users():
+        cid = u["chat_id"]
+        if tg(token, "getChat", chat_id=cid):   # a chat the bot can really reach
+            if register:
+                tg(token, "setMyShortDescription",
+                   short_description=f"Cheapest-trip price hunts. backup:{cid}")
+            return cid
+    return None
+
+
+def _dump_state():
+    db = _db()
+    state = {}
+    for t in BACKUP_TABLES:
+        cur = db.execute(f"SELECT * FROM {t}")
+        state[t] = {"cols": [d[0] for d in cur.description],
+                    "rows": [list(r) for r in cur.fetchall()]}
+    db.close()
+    return state
+
+
+def _restore_state(state):
+    db = _db()
+    n = 0
+    for t in BACKUP_TABLES:
+        data = state.get(t) or {}
+        cols = [c for c in (data.get("cols") or []) if re.fullmatch(r"\w+", str(c))]
+        if not cols:
+            continue
+        sql = (f"INSERT OR REPLACE INTO {t} ({','.join(cols)}) "
+               f"VALUES ({','.join('?' * len(cols))})")
+        for row in data.get("rows") or []:
+            if isinstance(row, list) and len(row) == len(cols):
+                try:
+                    db.execute(sql, row)
+                    n += 1
+                except sqlite3.Error:
+                    pass    # e.g. a column from an older schema - skip the row
+        db.commit()
+    db.close()
+    return n
+
+
+def _push_backup(token):
+    """Upload the current state as the pinned backup document (edit the existing
+    pin in place when it's ours; otherwise send + pin a new one, silently)."""
+    chat = _backup_chat(token)
+    if not chat:
+        return False
+    payload = json.dumps(_dump_state(), ensure_ascii=False).encode("utf-8")
+    caption = (f"{BACKUP_MARK} · {datetime.now().isoformat(timespec='seconds')}\n"
+               "Keeps your hunts + pairing safe across server restarts - leave pinned.")
+    files = {"document": ("trip_backup.json", payload, "application/json")}
+    pin = (tg(token, "getChat", chat_id=chat) or {}).get("pinned_message") or {}
+    if pin.get("document") and BACKUP_MARK in (pin.get("caption") or ""):
+        media = json.dumps({"type": "document", "media": "attach://document",
+                            "caption": caption})
+        if tg_upload(token, "editMessageMedia", files, chat_id=chat,
+                     message_id=pin["message_id"], media=media):
+            return True
+    msg = tg_upload(token, "sendDocument", files, chat_id=chat,
+                    caption=caption, disable_notification=True)
+    if not msg:
+        return False
+    tg(token, "pinChatMessage", chat_id=chat, message_id=msg["message_id"],
+       disable_notification=True)
+    return True
+
+
+def _restore_backup(token):
+    """On boot: if the DB is empty (= the host wiped the disk), pull the pinned
+    backup document and put every row back. Never touches a non-empty DB."""
+    db = _db()
+    have = db.execute("SELECT (SELECT COUNT(*) FROM tg_users) + "
+                      "(SELECT COUNT(*) FROM hunts) + "
+                      "(SELECT COUNT(*) FROM web_sessions)").fetchone()[0]
+    db.close()
+    if have:
+        return False
+    chat = _backup_chat(token, register=False)
+    if not chat:
+        return False
+    pin = (tg(token, "getChat", chat_id=chat) or {}).get("pinned_message") or {}
+    doc = pin.get("document") or {}
+    if not doc.get("file_id") or BACKUP_MARK not in (pin.get("caption") or ""):
+        return False
+    f = tg(token, "getFile", file_id=doc["file_id"])
+    if not f or not f.get("file_path"):
+        return False
+    try:
+        r = requests.get(f"https://api.telegram.org/file/bot{token}/{f['file_path']}",
+                         timeout=65)
+        state = r.json()
+    except (requests.RequestException, ValueError):
+        return False
+    n = _restore_state(state if isinstance(state, dict) else {})
+    if n:
+        print(f"  restored {n} rows (pairings + hunts) from the Telegram backup")
+    return n > 0
+
+
+def persist_loop(token):
+    """Restore once at boot, then push a fresh backup ~20 s after every change
+    (debounced: a burst of edits or a whole watcher sweep = one upload)."""
+    try:
+        _restore_backup(token)
+    except Exception as e:
+        print(f"  ! backup restore failed: {e}")
+    while True:
+        _DIRTY.wait()
+        time.sleep(20)
+        _DIRTY.clear()
+        try:
+            if not _push_backup(token):
+                print("  ! backup push failed (no reachable backup chat yet?)")
+        except Exception as e:
+            print(f"  ! backup push failed: {e}")
 
 
 # --------------------------------------------------------------------------- #
@@ -780,6 +955,7 @@ def start_in_background(cfg):
     if not token or _STARTED:
         return False
     _STARTED = True
+    threading.Thread(target=persist_loop, args=(token,), daemon=True).start()
     threading.Thread(target=poll_loop, args=(cfg, token), daemon=True).start()
     threading.Thread(target=watch_loop, args=(cfg, token), daemon=True).start()
     print(f"Telegram bot running (@{bot_username(token) or '?'}) - "
@@ -898,6 +1074,7 @@ def update_hunt_ui(hunt_id, price=None, metric=None, include_bag=None, settings=
                (*vals, int(hunt_id), chat_id))
     db.commit()
     db.close()
+    mark_dirty()
     return {"hunts": list_hunts(chat_id),
             "watching": settings_desc(settings) if settings else None}
 
@@ -909,6 +1086,7 @@ def remove_hunt_ui(hunt_id, browser_id=None):
     if chat_id is not None:
         db.execute("DELETE FROM hunts WHERE id=? AND chat_id=?", (int(hunt_id), chat_id))
         db.commit()
+        mark_dirty()
     db.close()
     return {"hunts": list_hunts(chat_id) if chat_id else []}
 
@@ -921,5 +1099,6 @@ if __name__ == "__main__":
         print("   config.json -> telegram.bot_token, or set TELEGRAM_BOT_TOKEN.")
         sys.exit(1)
     print(f"Bot @{bot_username(token) or '?'} polling. Ctrl+C to stop.")
+    threading.Thread(target=persist_loop, args=(token,), daemon=True).start()
     threading.Thread(target=watch_loop, args=(cfg, token), daemon=True).start()
     poll_loop(cfg, token)
